@@ -1,0 +1,8 @@
+.env
+__pycache__/
+models/
+.DS_Store
+scanner.cfg
+*.pdf
+
+scans/

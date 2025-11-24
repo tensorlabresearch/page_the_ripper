@@ -1,0 +1,29 @@
+[defaults]
+dpi = 300
+color_mode = Grayscale8
+verify_ssl = false
+target_width = 405
+target_height = 636
+output_dir = scans
+
+[scanner:flatbed]
+label = Flatbed Scanner
+backend = sane
+sane_hint = Flatbed
+command =
+source = Flatbed
+duplex = false
+extra_args =
+color_mode = Grayscale8
+
+[scanner:adf]
+label = ADF Scanner
+backend = sane
+sane_hint = ES-580W
+command =
+source = ADF Duplex
+duplex = true
+extra_args =
+color_mode = Grayscale8
+page_width_mm = 215.9
+page_height_mm = 279.4
