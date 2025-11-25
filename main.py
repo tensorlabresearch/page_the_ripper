@@ -63,7 +63,6 @@ DEFAULT_CONFIG: Dict[str, Dict[str, str]] = {
         "duplex": "false",
         "extra_args": "",
         "color_mode": "Grayscale8",
-        "ocr_optimize": "0",
     },
     "scanner:es580w": {
         "label": "ES-580W",
@@ -76,7 +75,6 @@ DEFAULT_CONFIG: Dict[str, Dict[str, str]] = {
         "color_mode": "Grayscale8",
         "page_width_mm": "215.9",
         "page_height_mm": "279.4",
-        "ocr_optimize": "3",
     },
 }
 
@@ -140,10 +138,6 @@ def _cfg_get_float(section: str, option: str, fallback: float) -> float:
         return CONFIG.getfloat(section, option, fallback=fallback)
     except ValueError:
         return fallback
-
-
-def _clamp_optimize(value: int) -> int:
-    return max(0, min(3, value))
 
 
 DPI = _cfg_get_int("defaults", "dpi", 300)
@@ -971,12 +965,10 @@ def run_ocr_on_pdf(
     *,
     language: str = TESSERACT_LANG,
     image_dpi: Optional[int] = None,
-    optimize: int = 0,
 ) -> None:
     output_pdf = Path(output_pdf)
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     effective_dpi = image_dpi or 300
-    optimize_level = _clamp_optimize(int(optimize))
     try:
         os.environ["OMP_THREAD_LIMIT"] = os.environ.get("OMP_THREAD_LIMIT", "2")
         ocrmypdf.ocr(
@@ -988,7 +980,7 @@ def run_ocr_on_pdf(
             clean_final=False,
             rotate_pages=False,
             rotate_pages_threshold=None,
-            optimize=optimize_level,
+            optimize=0,
             progress_bar=False,
             force_ocr=True,
             image_dpi=effective_dpi,
@@ -1174,7 +1166,6 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
             default_color_mode = COLOR_MODE
 
         backend = CONFIG.get(section, "backend", fallback="sane").strip().lower() or "sane"
-        ocr_optimize = _clamp_optimize(_cfg_get_int(section, "ocr_optimize", 0))
 
         if backend == "sane":
             options = {
@@ -1187,14 +1178,12 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
                 "page_width_mm": _cfg_get_float(section, "page_width_mm", 0.0),
                 "page_height_mm": _cfg_get_float(section, "page_height_mm", 0.0),
                 "final_reduce_command": CONFIG.get(section, "final_reduce_command", fallback="").strip(),
-                "ocr_optimize": ocr_optimize,
             }
             entry: Dict[str, object] = {
                 "label": label,
                 "default_color_mode": default_color_mode,
                 "backend": "sane",
                 "options": options,
-                "ocr_optimize": ocr_optimize,
             }
         elif backend == "escl":
             url = CONFIG.get(section, "url", fallback="").strip()
@@ -1213,7 +1202,6 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
                 "default_url": url,
                 "runner": runner,
                 "auth": auth,
-                "ocr_optimize": ocr_optimize,
             }
         else:
             continue
@@ -1543,7 +1531,6 @@ class JobWorker(threading.Thread):
                         entry["stage_detail"] = detail
 
             entry = SCANNER_REGISTRY.get(payload["scanner"], {})
-            ocr_optimize = _clamp_optimize(int(entry.get("ocr_optimize", 0) or 0))
             result = dispatch_scan(
                 payload["scanner"],
                 dpi=int(payload["dpi"]),
@@ -1570,7 +1557,7 @@ class JobWorker(threading.Thread):
                 JOB_STORE.update_job(job_id, status="running", batch_count=total_batches, batches_completed=0)
                 if total_batches == 1:
                     update_stage("ocr", "batch 1/1")
-                    run_ocr_on_pdf(tmp_raw_path, output_path.with_suffix(".ocr.pdf"), image_dpi=job_dpi, optimize=ocr_optimize)
+                    run_ocr_on_pdf(tmp_raw_path, output_path.with_suffix(".ocr.pdf"), image_dpi=job_dpi)
                     JOB_STORE.update_job(job_id, status="running", batches_completed=1)
                     tmp_pdf = output_path.with_suffix(".ocr.pdf")
                 else:
@@ -1594,7 +1581,7 @@ class JobWorker(threading.Thread):
                         update_stage("ocr", label)
                         JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx - 1)
                         ocr_out = chunk_path.with_suffix(".ocr.pdf")
-                        run_ocr_on_pdf(chunk_path, ocr_out, image_dpi=job_dpi, optimize=ocr_optimize)
+                        run_ocr_on_pdf(chunk_path, ocr_out, image_dpi=job_dpi)
                         ocr_chunk_paths.append(ocr_out)
                         JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx)
 
