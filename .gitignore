@@ -6,3 +6,5 @@ scanner.cfg
 *.pdf
 
 scans/
+
+scan_jobs.sqlite3

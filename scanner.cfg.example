@@ -15,6 +15,7 @@ source = Flatbed
 duplex = false
 extra_args =
 color_mode = Grayscale8
+ocr_optimize = 0
 
 [scanner:adf]
 label = ADF Scanner
@@ -27,3 +28,4 @@ extra_args =
 color_mode = Grayscale8
 page_width_mm = 215.9
 page_height_mm = 279.4
+ocr_optimize = 0

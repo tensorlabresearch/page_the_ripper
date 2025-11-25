@@ -17,7 +17,7 @@ import platform
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Set, Callable, Union, Any
+from typing import Dict, List, Tuple, Optional, Set, Callable, Union, Any, TypeVar
 from urllib.parse import urljoin
 
 import img2pdf
@@ -63,6 +63,7 @@ DEFAULT_CONFIG: Dict[str, Dict[str, str]] = {
         "duplex": "false",
         "extra_args": "",
         "color_mode": "Grayscale8",
+        "ocr_optimize": "0",
     },
     "scanner:es580w": {
         "label": "ES-580W",
@@ -75,6 +76,7 @@ DEFAULT_CONFIG: Dict[str, Dict[str, str]] = {
         "color_mode": "Grayscale8",
         "page_width_mm": "215.9",
         "page_height_mm": "279.4",
+        "ocr_optimize": "3",
     },
 }
 
@@ -138,6 +140,10 @@ def _cfg_get_float(section: str, option: str, fallback: float) -> float:
         return CONFIG.getfloat(section, option, fallback=fallback)
     except ValueError:
         return fallback
+
+
+def _clamp_optimize(value: int) -> int:
+    return max(0, min(3, value))
 
 
 DPI = _cfg_get_int("defaults", "dpi", 300)
@@ -965,10 +971,12 @@ def run_ocr_on_pdf(
     *,
     language: str = TESSERACT_LANG,
     image_dpi: Optional[int] = None,
+    optimize: int = 0,
 ) -> None:
     output_pdf = Path(output_pdf)
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
     effective_dpi = image_dpi or 300
+    optimize_level = _clamp_optimize(int(optimize))
     try:
         os.environ["OMP_THREAD_LIMIT"] = os.environ.get("OMP_THREAD_LIMIT", "2")
         ocrmypdf.ocr(
@@ -980,7 +988,7 @@ def run_ocr_on_pdf(
             clean_final=False,
             rotate_pages=False,
             rotate_pages_threshold=None,
-            optimize=0,
+            optimize=optimize_level,
             progress_bar=False,
             force_ocr=True,
             image_dpi=effective_dpi,
@@ -1166,6 +1174,7 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
             default_color_mode = COLOR_MODE
 
         backend = CONFIG.get(section, "backend", fallback="sane").strip().lower() or "sane"
+        ocr_optimize = _clamp_optimize(_cfg_get_int(section, "ocr_optimize", 0))
 
         if backend == "sane":
             options = {
@@ -1178,12 +1187,14 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
                 "page_width_mm": _cfg_get_float(section, "page_width_mm", 0.0),
                 "page_height_mm": _cfg_get_float(section, "page_height_mm", 0.0),
                 "final_reduce_command": CONFIG.get(section, "final_reduce_command", fallback="").strip(),
+                "ocr_optimize": ocr_optimize,
             }
             entry: Dict[str, object] = {
                 "label": label,
                 "default_color_mode": default_color_mode,
                 "backend": "sane",
                 "options": options,
+                "ocr_optimize": ocr_optimize,
             }
         elif backend == "escl":
             url = CONFIG.get(section, "url", fallback="").strip()
@@ -1202,6 +1213,7 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
                 "default_url": url,
                 "runner": runner,
                 "auth": auth,
+                "ocr_optimize": ocr_optimize,
             }
         else:
             continue
@@ -1249,10 +1261,13 @@ class ScanCancelled(Exception):
     """Raised when a scan is cancelled mid-flight."""
 
 
+T = TypeVar("T")
+
+
 class JobStore:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -1260,51 +1275,66 @@ class JobStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scan_jobs (
+                id TEXT PRIMARY KEY,
+                scanner TEXT NOT NULL,
+                status TEXT NOT NULL,
+                params TEXT,
+                result_path TEXT,
+                error TEXT,
+                stage TEXT,
+                stage_detail TEXT,
+                number_of_pages INTEGER,
+                batch_count INTEGER,
+                batches_completed INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(scan_jobs)")}
+        if "stage" not in columns:
+            conn.execute("ALTER TABLE scan_jobs ADD COLUMN stage TEXT")
+        if "stage_detail" not in columns:
+            conn.execute("ALTER TABLE scan_jobs ADD COLUMN stage_detail TEXT")
+        if "number_of_pages" not in columns:
+            conn.execute("ALTER TABLE scan_jobs ADD COLUMN number_of_pages INTEGER")
+        if "batch_count" not in columns:
+            conn.execute("ALTER TABLE scan_jobs ADD COLUMN batch_count INTEGER")
+        if "batches_completed" not in columns:
+            conn.execute("ALTER TABLE scan_jobs ADD COLUMN batches_completed INTEGER")
+
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS scan_jobs (
-                    id TEXT PRIMARY KEY,
-                    scanner TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    params TEXT,
-                    result_path TEXT,
-                    error TEXT,
-                    stage TEXT,
-                    stage_detail TEXT,
-                    number_of_pages INTEGER,
-                    batch_count INTEGER,
-                    batches_completed INTEGER,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(scan_jobs)") }
-            if "stage" not in columns:
-                conn.execute("ALTER TABLE scan_jobs ADD COLUMN stage TEXT")
-            if "stage_detail" not in columns:
-                conn.execute("ALTER TABLE scan_jobs ADD COLUMN stage_detail TEXT")
-            if "number_of_pages" not in columns:
-                conn.execute("ALTER TABLE scan_jobs ADD COLUMN number_of_pages INTEGER")
-            if "batch_count" not in columns:
-                conn.execute("ALTER TABLE scan_jobs ADD COLUMN batch_count INTEGER")
-            if "batches_completed" not in columns:
-                conn.execute("ALTER TABLE scan_jobs ADD COLUMN batches_completed INTEGER")
+        with self.lock, self._connect() as conn:
+            self._ensure_schema(conn)
+
+    def _with_schema_retry(self, func: Callable[[], T]) -> T:
+        try:
+            return func()
+        except sqlite3.OperationalError as exc:
+            if "no such table: scan_jobs" in str(exc).lower():
+                self._init_db()
+                return func()
+            raise
 
     def create_job(self, job_id: str, scanner: str, params: Dict[str, object]) -> None:
         now = datetime.utcnow().isoformat()
         payload = json.dumps(params)
-        with self.lock, self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO scan_jobs (id, scanner, status, params, result_path, error, stage, stage_detail, number_of_pages, batch_count, batches_completed, created_at, updated_at)
-                VALUES (?, ?, 'pending', ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, ?)
-                """,
-                (job_id, scanner, payload, "queued", now, now),
-            )
+        def _insert() -> None:
+            with self.lock, self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO scan_jobs (id, scanner, status, params, result_path, error, stage, stage_detail, number_of_pages, batch_count, batches_completed, created_at, updated_at)
+                    VALUES (?, ?, 'pending', ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, ?)
+                    """,
+                    (job_id, scanner, payload, "queued", now, now),
+                )
+
+        self._with_schema_retry(_insert)
 
     def update_job(
         self,
@@ -1321,27 +1351,30 @@ class JobStore:
     ) -> None:
         now = datetime.utcnow().isoformat()
         result_value = str(result_path) if result_path else None
-        with self.lock, self._connect() as conn:
-            assignments = ["status = ?", "result_path = ?", "error = ?", "updated_at = ?"]
-            values: List[object] = [status, result_value, error, now]
-            if stage is not None:
-                assignments.append("stage = ?")
-                values.append(stage)
-            if stage_detail is not None:
-                assignments.append("stage_detail = ?")
-                values.append(stage_detail)
-            if number_of_pages is not None:
-                assignments.append("number_of_pages = ?")
-                values.append(number_of_pages)
-            if batch_count is not None:
-                assignments.append("batch_count = ?")
-                values.append(batch_count)
-            if batches_completed is not None:
-                assignments.append("batches_completed = ?")
-                values.append(batches_completed)
-            sql = f"UPDATE scan_jobs SET {', '.join(assignments)} WHERE id = ?"
-            values.append(job_id)
-            conn.execute(sql, tuple(values))
+        def _update() -> None:
+            with self.lock, self._connect() as conn:
+                assignments = ["status = ?", "result_path = ?", "error = ?", "updated_at = ?"]
+                values: List[object] = [status, result_value, error, now]
+                if stage is not None:
+                    assignments.append("stage = ?")
+                    values.append(stage)
+                if stage_detail is not None:
+                    assignments.append("stage_detail = ?")
+                    values.append(stage_detail)
+                if number_of_pages is not None:
+                    assignments.append("number_of_pages = ?")
+                    values.append(number_of_pages)
+                if batch_count is not None:
+                    assignments.append("batch_count = ?")
+                    values.append(batch_count)
+                if batches_completed is not None:
+                    assignments.append("batches_completed = ?")
+                    values.append(batches_completed)
+                sql = f"UPDATE scan_jobs SET {', '.join(assignments)} WHERE id = ?"
+                values.append(job_id)
+                conn.execute(sql, tuple(values))
+
+        self._with_schema_retry(_update)
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> Dict[str, object]:
@@ -1351,24 +1384,33 @@ class JobStore:
         return data
 
     def get_job(self, job_id: str) -> Optional[Dict[str, object]]:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)).fetchone()
-        if not row:
-            return None
-        return self._row_to_dict(row)
+        def _lookup() -> Optional[Dict[str, object]]:
+            with self._connect() as conn:
+                row = conn.execute("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not row:
+                return None
+            return self._row_to_dict(row)
+
+        return self._with_schema_retry(_lookup)
 
     def delete_job(self, job_id: str) -> None:
-        with self.lock, self._connect() as conn:
-            conn.execute("DELETE FROM scan_jobs WHERE id = ?", (job_id,))
+        def _delete() -> None:
+            with self.lock, self._connect() as conn:
+                conn.execute("DELETE FROM scan_jobs WHERE id = ?", (job_id,))
+
+        self._with_schema_retry(_delete)
 
     def list_jobs(self, *, offset: int, limit: int) -> Tuple[List[Dict[str, object]], int]:
-        with self._connect() as conn:
-            total = conn.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
-            rows = conn.execute(
-                "SELECT * FROM scan_jobs ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-        return [self._row_to_dict(row) for row in rows], total
+        def _list() -> Tuple[List[Dict[str, object]], int]:
+            with self._connect() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
+                rows = conn.execute(
+                    "SELECT * FROM scan_jobs ORDER BY datetime(created_at) DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                ).fetchall()
+            return [self._row_to_dict(row) for row in rows], total
+
+        return self._with_schema_retry(_list)
 
 
 JOB_STORE = JobStore(DB_PATH)
@@ -1501,6 +1543,7 @@ class JobWorker(threading.Thread):
                         entry["stage_detail"] = detail
 
             entry = SCANNER_REGISTRY.get(payload["scanner"], {})
+            ocr_optimize = _clamp_optimize(int(entry.get("ocr_optimize", 0) or 0))
             result = dispatch_scan(
                 payload["scanner"],
                 dpi=int(payload["dpi"]),
@@ -1527,7 +1570,7 @@ class JobWorker(threading.Thread):
                 JOB_STORE.update_job(job_id, status="running", batch_count=total_batches, batches_completed=0)
                 if total_batches == 1:
                     update_stage("ocr", "batch 1/1")
-                    run_ocr_on_pdf(tmp_raw_path, output_path.with_suffix(".ocr.pdf"), image_dpi=job_dpi)
+                    run_ocr_on_pdf(tmp_raw_path, output_path.with_suffix(".ocr.pdf"), image_dpi=job_dpi, optimize=ocr_optimize)
                     JOB_STORE.update_job(job_id, status="running", batches_completed=1)
                     tmp_pdf = output_path.with_suffix(".ocr.pdf")
                 else:
@@ -1551,7 +1594,7 @@ class JobWorker(threading.Thread):
                         update_stage("ocr", label)
                         JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx - 1)
                         ocr_out = chunk_path.with_suffix(".ocr.pdf")
-                        run_ocr_on_pdf(chunk_path, ocr_out, image_dpi=job_dpi)
+                        run_ocr_on_pdf(chunk_path, ocr_out, image_dpi=job_dpi, optimize=ocr_optimize)
                         ocr_chunk_paths.append(ocr_out)
                         JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx)
 
