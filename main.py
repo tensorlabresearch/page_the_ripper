@@ -901,28 +901,11 @@ def finalize_page(
     processing_opts: Optional[Dict[str, object]] = None,
 ) -> Image.Image:
     opts = processing_opts or {}
-    do_crop = bool(opts.get("do_crop", True))
-    crop_box = opts.get("crop_box")
-
+    # Cropping and rotation are intentionally disabled to preserve full pages.
     page = pil_img
 
     page = light_cleanup(page, perform_crop=False)
     fallback_page = page.copy()
-
-    if do_crop and crop_box is None:
-        page = trim_white_borders(page)
-
-    if crop_box is not None:
-        left, top, right, bottom = crop_box
-        width, height = page.size
-        box = (
-            max(0, min(width, int(round(left * width)))),
-            max(0, min(height, int(round(top * height)))),
-            max(0, min(width, int(round(right * width)))),
-            max(0, min(height, int(round(bottom * height)))),
-        )
-        if box[2] > box[0] and box[3] > box[1]:
-            page = page.crop(box)
 
     mode = "RGB" if color_mode == "RGB24" else "L"
     page = page.convert(mode)
@@ -936,7 +919,6 @@ def finalize_page(
         fallback = fallback_page.convert(mode)
         if TARGET_WIDTH > 0 and TARGET_HEIGHT > 0 and (fallback.width > TARGET_WIDTH or fallback.height > TARGET_HEIGHT):
             fallback = ImageOps.contain(fallback, (TARGET_WIDTH, TARGET_HEIGHT), method=Image.LANCZOS)
-        fallback = trim_white_borders(fallback)
         page = fallback
     return page
 
@@ -2036,7 +2018,7 @@ def create_scan(request: ScanRequest) -> ScanCreateResponse:
     entry = SCANNER_REGISTRY[request.scanner]
     dpi = DPI
     color_mode = str(entry.get("default_color_mode", COLOR_MODE))
-    processing_opts = {"do_crop": True, "auto_rotate": True, "crop_box": None}
+    processing_opts = {"do_crop": False, "auto_rotate": False, "crop_box": None}
     params_for_db = {"dpi": dpi}
     job_id = uuid.uuid4().hex
     JOB_STORE.create_job(job_id, request.scanner, params_for_db)
