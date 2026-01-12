@@ -1842,6 +1842,13 @@ class ScanRequest(BaseModel):
         description="Scanner identifier from configuration (e.g., 'et3850' or 'es580w')",
         examples=["et3850", "es580w"],
     )
+    dpi: Optional[int] = Field(
+        None,
+        ge=75,
+        le=1200,
+        description="Optional DPI override; defaults to configured scanner DPI when omitted",
+        examples=[300, 600, 1200],
+    )
 
 
 class ScanCreateResponse(BaseModel):
@@ -2016,7 +2023,7 @@ def create_scan(request: ScanRequest) -> ScanCreateResponse:
     if request.scanner not in SCANNER_REGISTRY:
         raise HTTPException(status_code=404, detail=f"Unknown scanner '{request.scanner}'")
     entry = SCANNER_REGISTRY[request.scanner]
-    dpi = DPI
+    dpi = int(request.dpi or DPI)
     color_mode = str(entry.get("default_color_mode", COLOR_MODE))
     processing_opts = {"do_crop": False, "auto_rotate": False, "crop_box": None}
     params_for_db = {"dpi": dpi}
