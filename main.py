@@ -1,6 +1,7 @@
 import configparser
 import io
 import os
+import sys
 import json
 import math
 import time
@@ -179,6 +180,8 @@ VERIFY_SSL = env_flag("SCANNER_VERIFY_SSL", _cfg_get_bool("defaults", "verify_ss
 SCAN_TIMEOUT = int(os.getenv("SCAN_TIMEOUT", "240"))
 CANCEL_WAIT_SECONDS = int(os.getenv("SCAN_CANCEL_WAIT", "30"))
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "deleted"}
+JOB_MONITOR_INTERVAL = int(os.getenv("JOB_MONITOR_INTERVAL", "60"))
+JOB_STALE_THRESHOLD = int(os.getenv("JOB_STALE_THRESHOLD", "600"))
 
 
 def create_escl_session(verify_ssl: Optional[bool] = None, auth: Optional[Tuple[str, str]] = None) -> requests.Session:
@@ -1617,6 +1620,171 @@ class JobWorker(threading.Thread):
 JOB_WORKER = JobWorker()
 
 
+class JobMonitor(threading.Thread):
+    """Background thread that monitors running jobs for failures and timeouts."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.stop_event = threading.Event()
+
+    def shutdown(self) -> None:
+        self.stop_event.set()
+
+    def run(self) -> None:
+        print("[monitor] Job monitor started", flush=True)
+        sys.stderr.write("[monitor] Job monitor started\n")
+        sys.stderr.flush()
+        while not self.stop_event.is_set():
+            try:
+                self._check_jobs()
+            except Exception as exc:
+                msg = f"[monitor] Error checking jobs: {exc}\n"
+                print(msg, flush=True)
+                sys.stderr.write(msg)
+                sys.stderr.flush()
+            self.stop_event.wait(JOB_MONITOR_INTERVAL)
+        print("[monitor] Job monitor stopped", flush=True)
+        sys.stderr.write("[monitor] Job monitor stopped\n")
+        sys.stderr.flush()
+
+    def _check_jobs(self) -> None:
+        now = datetime.utcnow()
+        jobs, _ = JOB_STORE.list_jobs(offset=0, limit=100)
+
+        running_or_pending = [j for j in jobs if j.get("status") in {"running", "pending"}]
+        if running_or_pending:
+            msg = f"[monitor] Checking {len(running_or_pending)} running/pending job(s) out of {len(jobs)} total\n"
+            sys.stderr.write(msg)
+            sys.stderr.flush()
+
+        for job in jobs:
+            job_id = str(job.get("id", ""))
+            status = str(job.get("status", ""))
+
+            if status not in {"running", "pending"}:
+                continue
+
+            updated_at_str = job.get("updated_at")
+            if not updated_at_str:
+                continue
+
+            try:
+                updated_at = datetime.fromisoformat(str(updated_at_str))
+                age_seconds = (now - updated_at).total_seconds()
+
+                if age_seconds > JOB_STALE_THRESHOLD:
+                    stage = job.get("stage", "unknown")
+                    stage_detail = job.get("stage_detail", "")
+
+                    is_in_worker = job_id in JOB_WORKER.running_jobs
+
+                    if not is_in_worker:
+                        error_msg = (
+                            f"Job became orphaned and was stuck in '{stage}' stage for "
+                            f"{int(age_seconds / 60)} minutes without updates. "
+                            f"This typically happens when the service is restarted or crashes during processing. "
+                            f"Last known stage: {stage}"
+                        )
+                        if stage_detail:
+                            error_msg += f" ({stage_detail})"
+
+                        print(f"[monitor] Marking orphaned job {job_id} as failed (age: {int(age_seconds)}s, stage: {stage})")
+                        JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
+                    else:
+                        job_entry = JOB_WORKER.running_jobs.get(job_id, {})
+                        process = job_entry.get("process")
+
+                        if process is not None:
+                            try:
+                                if hasattr(process, "poll"):
+                                    poll_result = process.poll()
+                                    if poll_result is not None and poll_result != 0:
+                                        error_msg = (
+                                            f"Job process exited unexpectedly with code {poll_result} "
+                                            f"while in '{stage}' stage after {int(age_seconds / 60)} minutes. "
+                                            f"The OCR or scanning process may have crashed."
+                                        )
+                                        if stage_detail:
+                                            error_msg += f" Last stage detail: {stage_detail}"
+
+                                        print(f"[monitor] Marking job {job_id} as failed (process died with code {poll_result})")
+                                        JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
+                                        JOB_WORKER.running_jobs.pop(job_id, None)
+                            except Exception as check_exc:
+                                print(f"[monitor] Error checking process for job {job_id}: {check_exc}")
+                        else:
+                            error_msg = (
+                                f"Job stuck in '{stage}' stage for {int(age_seconds / 60)} minutes "
+                                f"without updates and no process handle available. "
+                                f"This may indicate a deadlock or infinite loop in the processing code."
+                            )
+                            if stage_detail:
+                                error_msg += f" Last stage detail: {stage_detail}"
+
+                            print(f"[monitor] Marking stuck job {job_id} as failed (age: {int(age_seconds)}s, no process)")
+                            JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
+                            JOB_WORKER.running_jobs.pop(job_id, None)
+
+            except (ValueError, TypeError) as exc:
+                print(f"[monitor] Error parsing timestamp for job {job_id}: {exc}")
+                continue
+
+
+_cleanup_already_run = False
+
+def cleanup_orphaned_jobs_on_startup() -> None:
+    """Mark any running/pending jobs from previous instance as failed."""
+    global _cleanup_already_run
+    if _cleanup_already_run:
+        msg = "[startup] Cleanup already run, skipping\n"
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+        return
+    _cleanup_already_run = True
+
+    msg = "[startup] Checking for orphaned jobs from previous run...\n"
+    sys.stderr.write(msg)
+    sys.stderr.flush()
+    print(msg.rstrip(), flush=True)
+    jobs, _ = JOB_STORE.list_jobs(offset=0, limit=1000)
+    orphaned_count = 0
+
+    for job in jobs:
+        job_id = str(job.get("id", ""))
+        status = str(job.get("status", ""))
+
+        if status in {"running", "pending"}:
+            stage = job.get("stage", "unknown")
+            stage_detail = job.get("stage_detail", "")
+            created_at = job.get("created_at", "")
+
+            error_msg = (
+                f"Job was left in '{status}' status (stage: '{stage}') when the service was restarted. "
+                f"The job could not be completed because the process was terminated. "
+                f"Please retry the scan if needed."
+            )
+            if stage_detail:
+                error_msg += f" Last progress: {stage_detail}"
+
+            msg = f"[startup] Marking orphaned job {job_id} as failed (was {status}, stage: {stage}, created: {created_at})\n"
+            sys.stderr.write(msg)
+            sys.stderr.flush()
+            print(msg.rstrip(), flush=True)
+            JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
+            orphaned_count += 1
+
+    if orphaned_count > 0:
+        msg = f"[startup] Cleaned up {orphaned_count} orphaned job(s)\n"
+    else:
+        msg = "[startup] No orphaned jobs found\n"
+    sys.stderr.write(msg)
+    sys.stderr.flush()
+    print(msg.rstrip(), flush=True)
+
+
+JOB_MONITOR = JobMonitor()
+
+
 INDEX_HTML = """
 <!DOCTYPE html>
 <html lang=\"en\">
@@ -1921,12 +2089,18 @@ def index() -> HTMLResponse:
 @app.on_event("startup")
 def _startup() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_orphaned_jobs_on_startup()
     if not JOB_WORKER.is_alive():
         JOB_WORKER.start()
+    if not JOB_MONITOR.is_alive():
+        JOB_MONITOR.start()
 
 
 @app.on_event("shutdown")
 def _shutdown() -> None:
+    if JOB_MONITOR.is_alive():
+        JOB_MONITOR.shutdown()
+        JOB_MONITOR.join(timeout=5)
     if JOB_WORKER.is_alive():
         JOB_WORKER.shutdown()
         JOB_WORKER.join(timeout=10)

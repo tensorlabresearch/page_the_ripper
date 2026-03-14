@@ -1,0 +1,13 @@
+Package: page-the-ripper
+Version: 1.0.0
+Architecture: all
+Maintainer: Tensor Lab Research <kai5263499@users.noreply.github.com>
+Description: Scan, OCR, and build searchable PDFs from Epson network scanners
+ FastAPI service that drives SANE and eSCL scanners, applies image
+ cleanup, and produces text-searchable PDFs via OCRmyPDF.
+Depends: python3 (>= 3.11), python3-venv, python3-dev, sane-utils,
+ tesseract-ocr, tesseract-ocr-eng, ghostscript, libxml2-dev, libxslt1-dev,
+ libjpeg-dev, zlib1g-dev, libqpdf-dev
+Recommends: unpaper, pngquant
+Section: utils
+Priority: optional

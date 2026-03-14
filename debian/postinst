@@ -1,0 +1,44 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create system user if it does not exist
+        if ! id -u pageripper >/dev/null 2>&1; then
+            adduser --system --group --no-create-home \
+                --home /opt/page-the-ripper pageripper
+        fi
+
+        # Add pageripper to scanner and lp groups for device access
+        for grp in scanner lp; do
+            if getent group "$grp" >/dev/null 2>&1; then
+                usermod -aG "$grp" pageripper 2>/dev/null || true
+            fi
+        done
+
+        # Create venv and install Python dependencies
+        python3 -m venv /opt/page-the-ripper/.venv
+        /opt/page-the-ripper/.venv/bin/pip install --upgrade pip >/dev/null 2>&1
+        /opt/page-the-ripper/.venv/bin/pip install \
+            -r /opt/page-the-ripper/requirements.txt
+
+        # Generate scanner config if none exists
+        if [ ! -f /etc/page-the-ripper/scanner.cfg ]; then
+            mkdir -p /etc/page-the-ripper
+            /usr/lib/page-the-ripper/detect-scanners \
+                --output /etc/page-the-ripper/scanner.cfg || true
+        fi
+
+        # Ensure runtime directories exist with correct ownership
+        mkdir -p /var/lib/page-the-ripper/scans
+        chown -R pageripper:pageripper /var/lib/page-the-ripper
+        chown -R pageripper:pageripper /opt/page-the-ripper/.venv
+
+        # Enable and start the service
+        systemctl daemon-reload
+        systemctl enable page-the-ripper
+        systemctl start page-the-ripper || true
+        ;;
+esac
+
+exit 0

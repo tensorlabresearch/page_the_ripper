@@ -8,3 +8,5 @@ scanner.cfg
 scans/
 
 scan_jobs.sqlite3
+debian/build/
+.venv/
