@@ -4,29 +4,28 @@ import argparse
 import os
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Sequence
 
 from PIL import Image
 
 import main
 
-
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 
-ESCL_CAPTURE_BY_RUNNER: Dict[Callable[..., object], Callable[..., List[bytes]]] = {
+ESCL_CAPTURE_BY_RUNNER: dict[Callable[..., object], Callable[..., list[bytes]]] = {
     main.scan_et_3850_platen: main.capture_et_3850_platen_raw,
     main.scan_es_580w_letter_duplex: main.capture_es_580w_letter_duplex_raw,
 }
 
 
-def resolve_color_mode(entry: Dict[str, object], *, requested: str | None, force_color: bool) -> str:
+def resolve_color_mode(entry: dict[str, object], *, requested: str | None, force_color: bool) -> str:
     default_mode = str(entry.get("default_color_mode", main.COLOR_MODE))
     return main.determine_color_mode(requested, force_color=force_color, default_mode=default_mode)
 
 
-def gather_image_paths(inputs: Sequence[str]) -> List[Path]:
-    files: List[Path] = []
+def gather_image_paths(inputs: Sequence[str]) -> list[Path]:
+    files: list[Path] = []
     for item in inputs:
         path = Path(item)
         if path.is_dir():
@@ -142,7 +141,7 @@ def run_ocr(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    combined: List[str] = []
+    combined: list[str] = []
     for idx, path in enumerate(inputs, start=1):
         with Image.open(path) as img:
             img.load()
@@ -160,7 +159,7 @@ def run_ocr(args: argparse.Namespace) -> None:
 
 def build_pdf(args: argparse.Namespace) -> None:
     inputs = gather_image_paths(args.inputs)
-    pages: List[Image.Image] = []
+    pages: list[Image.Image] = []
     try:
         for path in inputs:
             with Image.open(path) as img:
@@ -205,13 +204,20 @@ def build_parser() -> argparse.ArgumentParser:
     finalize = sub.add_parser("finalize", help="Apply cleanup and scaling to scanned pages")
     finalize.add_argument("output", help="Directory to write processed page-###.png files")
     finalize.add_argument("inputs", nargs="+", help="Input image files or directories")
-    finalize.add_argument("--color-mode", choices=["Grayscale8", "RGB24"], default="Grayscale8", help="Color mode for output images")
+    finalize.add_argument(
+        "--color-mode", choices=["Grayscale8", "RGB24"], default="Grayscale8", help="Color mode for output images"
+    )
     finalize.add_argument("--no-crop", action="store_true", help="Disable auto-cropping")
     finalize.set_defaults(func=finalize_pages)
 
     orient = sub.add_parser("orient", help="Rotate a page by quarter turns")
     orient.add_argument("input", help="Input image file")
-    orient.add_argument("--direction", choices=["left", "right", "flip"], default="left", help="Rotation direction (left=counter-clockwise)")
+    orient.add_argument(
+        "--direction",
+        choices=["left", "right", "flip"],
+        default="left",
+        help="Rotation direction (left=counter-clockwise)",
+    )
     orient.add_argument("--count", type=int, default=1, help="Number of 90° steps for left/right rotations")
     orient.add_argument("--output", help="Output path (defaults to in-place overwrite)")
     orient.set_defaults(func=orient_page)

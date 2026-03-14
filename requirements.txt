@@ -31,3 +31,4 @@ typing_extensions==4.15.0
 urllib3==2.5.0
 uvicorn==0.38.0
 wrapt==2.0.1
+httpx==0.28.1

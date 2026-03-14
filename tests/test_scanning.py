@@ -1,16 +1,33 @@
 from __future__ import annotations
 
 import importlib
+import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+CONFIG_TEMPLATE = """\
+[defaults]
+dpi = 300
+color_mode = Grayscale8
+verify_ssl = false
+target_width = 405
+target_height = 636
+output_dir = scans
 
-CONFIG_TEMPLATE = """\n[defaults]\ndpi = 300\ncolor_mode = Grayscale8\nverify_ssl = false\ntarget_width = 405\ntarget_height = 636\noutput_dir = scans\n\n[scanner:et3850]\nlabel = Test ET-3850\nbackend = sane\nsane_hint = Test ET-3850\ncommand =\nsource = Flatbed\nduplex = false\nextra_args =\ncolor_mode = Grayscale8\n"""
+[scanner:et3850]
+label = Test ET-3850
+backend = sane
+sane_hint = Test ET-3850
+command =
+source = Flatbed
+duplex = false
+extra_args =
+color_mode = Grayscale8
+"""
 
 
 @pytest.fixture()
@@ -30,21 +47,26 @@ def test_app(tmp_path, monkeypatch):
         *,
         dpi: int,
         color_mode: str,
-        processing_opts: Dict[str, object],
+        processing_opts: dict[str, object],
         progress_cb=None,
         job_entry=None,
         job_id=None,
     ):
         img = Image.new("L", (400, 600), color=240)
-        return [img]
+        raw_dir = Path(tempfile.mkdtemp(prefix="fake_scan_"))
+        return module.ScanResult(pages=[img], raw_dir=raw_dir, raw_paths=[])
 
     monkeypatch.setattr(module, "dispatch_scan", fake_dispatch)
     monkeypatch.setattr(module, "ocr_page", lambda _: "dummy text")
 
     def fake_create_pdf(pages, out_path, *, dpi):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(b"%PDF-FAKE%")
 
-    def fake_run_ocr(input_pdf: Path, output_pdf: Path, *, language: str = module.TESSERACT_LANG, image_dpi: int | None = None):
+    def fake_run_ocr(
+        input_pdf: Path, output_pdf: Path, *, language: str = module.TESSERACT_LANG, image_dpi: int | None = None
+    ):
+        output_pdf.parent.mkdir(parents=True, exist_ok=True)
         output_pdf.write_bytes(Path(input_pdf).read_bytes())
 
     monkeypatch.setattr(module, "create_pdf_from_images", fake_create_pdf)
@@ -54,9 +76,9 @@ def test_app(tmp_path, monkeypatch):
         yield client, module
 
 
-def wait_for_completion(client: TestClient, job_id: str, *, timeout: float = 5.0) -> Dict[str, object]:
+def wait_for_completion(client: TestClient, job_id: str, *, timeout: float = 5.0) -> dict[str, object]:
     deadline = time.time() + timeout
-    last_payload: Dict[str, object] | None = None
+    last_payload: dict[str, object] | None = None
     while time.time() < deadline:
         resp = client.get(f"/api/scans/{job_id}")
         resp.raise_for_status()
@@ -98,8 +120,6 @@ def test_scan_job_lifecycle(test_app):
     assert stages.get(job_id) == "completed"
     durations = {item["id"]: item.get("duration_seconds") for item in listing["items"]}
     assert durations[job_id] >= 0
-    stages = {item["id"]: item.get("stage") for item in listing["items"]}
-    assert stages.get(job_id) == "completed"
 
     result = client.get(f"/api/scans/download/{job_id}")
     assert result.status_code == 200

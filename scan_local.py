@@ -18,9 +18,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
     import img2pdf
@@ -32,9 +32,9 @@ except ImportError as exc:  # pragma: no cover - dependency missing at runtime
 
 import numpy as np
 import ocrmypdf
+import pytesseract
 from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
 from PIL import Image, ImageFilter, ImageOps
-import pytesseract
 
 CONFIG_PATH = Path(os.getenv("SCANNER_CFG", "scanner.cfg"))
 DEFAULT_OUTPUT_DIR = Path(os.getenv("SCAN_OUTPUT_DIR", "scans")).expanduser()
@@ -69,7 +69,7 @@ class ScannerEntry:
     extra_args: str
     page_width_mm: float
     page_height_mm: float
-    batch_count: Optional[int]
+    batch_count: int | None
     allow_remote: bool
 
 
@@ -81,8 +81,8 @@ def load_config(path: Path) -> configparser.ConfigParser:
     return cfg
 
 
-def build_registry(cfg: configparser.ConfigParser) -> Dict[str, ScannerEntry]:
-    registry: Dict[str, ScannerEntry] = {}
+def build_registry(cfg: configparser.ConfigParser) -> dict[str, ScannerEntry]:
+    registry: dict[str, ScannerEntry] = {}
     for section in cfg.sections():
         if not section.startswith("scanner:"):
             continue
@@ -96,7 +96,9 @@ def build_registry(cfg: configparser.ConfigParser) -> Dict[str, ScannerEntry]:
             sane_hint=cfg.get(section, "sane_hint", fallback=label),
             sane_device=cfg.get(section, "sane_device", fallback=""),
             dpi=cfg.getint(section, "dpi", fallback=cfg.getint("defaults", "dpi", fallback=600)),
-            color_mode=cfg.get(section, "color_mode", fallback=cfg.get("defaults", "color_mode", fallback="Grayscale8")),
+            color_mode=cfg.get(
+                section, "color_mode", fallback=cfg.get("defaults", "color_mode", fallback="Grayscale8")
+            ),
             source=cfg.get(section, "source", fallback=cfg.get("defaults", "source", fallback="")),
             duplex=cfg.getboolean(section, "duplex", fallback=cfg.getboolean("defaults", "duplex", fallback=False)),
             extra_args=cfg.get(section, "extra_args", fallback=""),
@@ -166,7 +168,7 @@ def finalize_page(img: Image.Image, *, color_mode: str, auto_rotate: bool, do_cr
 # ---------- SANE helpers ----------
 
 
-def list_sane_devices() -> List[Tuple[str, str]]:
+def list_sane_devices() -> list[tuple[str, str]]:
     proc = subprocess.run(["scanimage", "-L"], capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "scanimage -L failed")
@@ -205,7 +207,9 @@ def ensure_local_scanner(device_id: str) -> None:
         )
 
 
-def run_scan(entry: ScannerEntry, *, dpi: int, color_mode: str, batch_dir: Path, device_override: Optional[str] = None) -> List[Path]:
+def run_scan(
+    entry: ScannerEntry, *, dpi: int, color_mode: str, batch_dir: Path, device_override: str | None = None
+) -> list[Path]:
     batch_dir.mkdir(parents=True, exist_ok=True)
     pattern = batch_dir / RAW_NAME_PATTERN
     if device_override:
@@ -234,7 +238,7 @@ def run_scan(entry: ScannerEntry, *, dpi: int, color_mode: str, batch_dir: Path,
             args.append(f"--batch-count={entry.batch_count}")
         else:
             args.append("--batch-count=1")
-    elif entry.batch_count is not None and f"--batch-count" not in entry.extra_args:
+    elif entry.batch_count is not None and "--batch-count" not in entry.extra_args:
         args.append(f"--batch-count={entry.batch_count}")
     if entry.page_width_mm > 0:
         args.extend(["-x", f"{entry.page_width_mm:g}"])
@@ -255,7 +259,7 @@ def run_scan(entry: ScannerEntry, *, dpi: int, color_mode: str, batch_dir: Path,
 
 
 def create_pdf_from_images(pages: Iterable[Image.Image], out_path: Path, *, dpi: int) -> None:
-    image_streams: List[bytes] = []
+    image_streams: list[bytes] = []
     for img in pages:
         buf = io.BytesIO()
         working = img.convert("RGB") if img.mode not in {"RGB", "L"} else img
@@ -289,8 +293,10 @@ def run_ocr(input_pdf: Path, output_pdf: Path, *, dpi: int, language: str) -> No
         raise RuntimeError(f"ocrmypdf dependency missing: {exc}") from exc
 
 
-def process_pages(raw_paths: List[Path], *, color_mode: str, auto_rotate: bool, do_crop: bool, dest_dir: Optional[Path] = None) -> List[Image.Image]:
-    pages: List[Image.Image] = []
+def process_pages(
+    raw_paths: list[Path], *, color_mode: str, auto_rotate: bool, do_crop: bool, dest_dir: Path | None = None
+) -> list[Image.Image]:
+    pages: list[Image.Image] = []
     if dest_dir:
         dest_dir.mkdir(parents=True, exist_ok=True)
     for path in raw_paths:

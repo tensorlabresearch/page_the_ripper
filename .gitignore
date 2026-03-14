@@ -4,7 +4,11 @@ models/
 .DS_Store
 scanner.cfg
 *.pdf
+*.sqlite3
 
 scans/
 
-scan_jobs.sqlite3
+.venv/
+.pytest_cache/
+*.pyc
+.ruff_cache/

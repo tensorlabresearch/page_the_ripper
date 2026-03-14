@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin
 
 import requests
@@ -19,7 +19,7 @@ from lxml import etree
 from urllib3.exceptions import InsecureRequestWarning
 
 DEF_NAME = "scan"
-SIZES: Dict[str, Sequence[int]] = {
+SIZES: dict[str, Sequence[int]] = {
     "a4": (2480, 3508),
     "a5": (1748, 2480),
     "b5": (2079, 2953),
@@ -57,22 +57,22 @@ class ESCLScanError(RuntimeError):
 @dataclass
 class ScannerCapabilities:
     version: str
-    make_and_model: Optional[str]
-    serial_number: Optional[str]
-    admin_uri: Optional[str]
-    formats: List[str]
-    color_modes: List[str]
-    x_resolutions: List[str]
-    y_resolutions: List[str]
+    make_and_model: str | None
+    serial_number: str | None
+    admin_uri: str | None
+    formats: list[str]
+    color_modes: list[str]
+    x_resolutions: list[str]
+    y_resolutions: list[str]
     max_width: int
     max_height: int
 
 
-def first(seq: Sequence[str], default: Optional[str] = None) -> Optional[str]:
+def first(seq: Sequence[str], default: str | None = None) -> str | None:
     return seq[0] if seq else default
 
 
-def first_int(seq: Sequence[str], default: Optional[int] = None) -> Optional[int]:
+def first_int(seq: Sequence[str], default: int | None = None) -> int | None:
     value = first(seq)
     return int(value) if value is not None else default
 
@@ -157,7 +157,7 @@ def poll_for_document(
     max_poll: int = MAX_POLL,
     poll_interval: float = 2.0,
 ) -> bytes:
-    for attempt in range(1, max_poll + 1):
+    for _attempt in range(1, max_poll + 1):
         response = session.get(result_url)
         if response.status_code == 200:
             return response.content
@@ -179,9 +179,7 @@ def size_dimensions(size_key: str, *, max_width: int, max_height: int) -> Sequen
 def resolve_resolution(requested: str, *, options_x: Iterable[str], options_y: Iterable[str]) -> str:
     if requested:
         if requested not in options_x or requested not in options_y:
-            raise ESCLScanError(
-                f"Unsupported resolution '{requested}'. X options: {options_x}, Y options: {options_y}"
-            )
+            raise ESCLScanError(f"Unsupported resolution '{requested}'. X options: {options_x}, Y options: {options_y}")
         return requested
     intersection = [value for value in options_x if value in options_y]
     if not intersection:
@@ -219,8 +217,8 @@ def scan_document(
     color_mode: str,
     resolution: str,
     size_key: str,
-    session: Optional[requests.Session] = None,
-    logger: Optional[logging.Logger] = None,
+    session: requests.Session | None = None,
+    logger: logging.Logger | None = None,
 ) -> str:
     session = session or create_session()
     logger = logger or logging.getLogger("scan")
@@ -237,9 +235,7 @@ def scan_document(
 
     requested_color_mode = resolve_color_mode(color_mode)
     if requested_color_mode not in capabilities.color_modes:
-        raise ESCLScanError(
-            f"Unsupported color mode '{requested_color_mode}', supported: {capabilities.color_modes}"
-        )
+        raise ESCLScanError(f"Unsupported color mode '{requested_color_mode}', supported: {capabilities.color_modes}")
 
     selected_resolution = resolve_resolution(
         resolution, options_x=capabilities.x_resolutions, options_y=capabilities.y_resolutions
@@ -265,14 +261,14 @@ def scan_document(
     return output_path
 
 
-def parse_env_file(path: str) -> Dict[str, str]:
+def parse_env_file(path: str) -> dict[str, str]:
     """
     Parse a simple ``.env`` style file into a dictionary.
 
     We keep it tiny to avoid an additional dependency.
     """
-    data: Dict[str, str] = {}
-    with open(path, "r", encoding="utf-8") as handle:
+    data: dict[str, str] = {}
+    with open(path, encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
@@ -284,14 +280,14 @@ def parse_env_file(path: str) -> Dict[str, str]:
     return data
 
 
-def load_scanner_urls(env_path: str, *, key: str = "SCANNER_URLS") -> List[str]:
+def load_scanner_urls(env_path: str, *, key: str = "SCANNER_URLS") -> list[str]:
     env = parse_env_file(env_path)
     raw_value = env.get(key, "")
     urls = [value.strip() for value in raw_value.split(",") if value.strip()]
     return [value if value.startswith(("http://", "https://")) else f"http://{value}" for value in urls]
 
 
-def list_jobs(session: requests.Session, base_url: str) -> List[Tuple[str, str]]:
+def list_jobs(session: requests.Session, base_url: str) -> list[tuple[str, str]]:
     ensure_http_url(base_url)
     status_url = urljoin(base_url, "eSCL/ScannerStatus")
     response = session.get(status_url)

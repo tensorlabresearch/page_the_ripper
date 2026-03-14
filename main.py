@@ -1,37 +1,36 @@
 import configparser
 import io
-import os
 import json
 import math
-import time
-import shutil
-import base64
-import tempfile
-import subprocess
-import sqlite3
-import threading
-import queue
-import uuid
-import shlex
+import os
 import platform
+import queue
+import shlex
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Set, Callable, Union, Any, TypeVar
-from urllib.parse import urljoin
+from pathlib import Path
+from typing import Any, TypeVar
 
 import img2pdf
-import requests
 import numpy as np
 import ocrmypdf
+import pytesseract
+import requests
+import urllib3
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from ocrmypdf.exceptions import ExitCodeException, MissingDependencyError
 from PIL import Image, ImageOps
-import urllib3
-from urllib3.exceptions import InsecureRequestWarning
-import pytesseract
-from fastapi import FastAPI, HTTPException, Response, Query
-from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
+from urllib3.exceptions import InsecureRequestWarning
 
 # Cap Tesseract threading to avoid runaway resource usage.
 os.environ.setdefault("OMP_THREAD_LIMIT", "2")
@@ -45,7 +44,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 # ====================== CONFIG ======================
 CONFIG_PATH = Path(os.getenv("SCANNER_CFG", "scanner.cfg"))
-DEFAULT_CONFIG: Dict[str, Dict[str, str]] = {
+DEFAULT_CONFIG: dict[str, dict[str, str]] = {
     "defaults": {
         "dpi": "600",
         "color_mode": "Grayscale8",
@@ -155,9 +154,10 @@ DEBUG_RAW_DIR = Path(os.getenv("SCAN_DEBUG_RAW_DIR", str(OUTPUT_DIR / "debug_raw
 
 @dataclass
 class ScanResult:
-    pages: List[Image.Image]
+    pages: list[Image.Image]
     raw_dir: Path
-    raw_paths: List[Path]
+    raw_paths: list[Path]
+
 
 # ---------------- OCR defaults ----------------
 TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "eng")
@@ -181,7 +181,7 @@ CANCEL_WAIT_SECONDS = int(os.getenv("SCAN_CANCEL_WAIT", "30"))
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "deleted"}
 
 
-def create_escl_session(verify_ssl: Optional[bool] = None, auth: Optional[Tuple[str, str]] = None) -> requests.Session:
+def create_escl_session(verify_ssl: bool | None = None, auth: tuple[str, str] | None = None) -> requests.Session:
     if verify_ssl is None:
         verify_ssl = VERIFY_SSL
     session = requests.Session()
@@ -194,13 +194,15 @@ def create_escl_session(verify_ssl: Optional[bool] = None, auth: Optional[Tuple[
 
 
 # ---------------- eSCL helpers (no external tools) ----------------
-def escl_post_scan_job(base_url: str,
-                       input_source: str,
-                       dpi: int,
-                       color_mode: str,
-                       media_name: Optional[str],
-                       session: Optional[requests.Session] = None,
-                       scan_region: Optional[Tuple[int, int]] = None) -> Tuple[str, str]:
+def escl_post_scan_job(
+    base_url: str,
+    input_source: str,
+    dpi: int,
+    color_mode: str,
+    media_name: str | None,
+    session: requests.Session | None = None,
+    scan_region: tuple[int, int] | None = None,
+) -> tuple[str, str]:
     """
     Create an eSCL ScanJob and return (job_url, next_document_url).
     input_source: "Platen", "Adf", or "AdfDuplex"
@@ -210,11 +212,15 @@ def escl_post_scan_job(base_url: str,
     # eSCL uses XML; keep settings minimal + broadly compatible
     # Namespaces commonly accepted by devices
     # - Version is often PWG 2.1, but many ignore it.
-    media_block = f"""
+    media_block = (
+        f"""
         <pwg:MediaSize>
             <pwg:Name>{media_name}</pwg:Name>
         </pwg:MediaSize>
-    """ if media_name else ""
+    """
+        if media_name
+        else ""
+    )
 
     region_block = ""
     if scan_region:
@@ -251,9 +257,7 @@ def escl_post_scan_job(base_url: str,
 
     session = session or create_escl_session()
     url = base_url.rstrip("/") + ESCL_SCANJOBS
-    r = session.post(url, data=xml.encode("utf-8"),
-                     headers={"Content-Type": "text/xml"},
-                     timeout=HTTP_TIMEOUT)
+    r = session.post(url, data=xml.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
 
     # Many devices return Location header with job path
@@ -278,13 +282,12 @@ def escl_post_scan_job(base_url: str,
     return job_url, nextdoc_url
 
 
-def escl_fetch_documents(nextdoc_url: str,
-                         session: Optional[requests.Session] = None) -> List[bytes]:
+def escl_fetch_documents(nextdoc_url: str, session: requests.Session | None = None) -> list[bytes]:
     """
     Pull every document (page image) for the job until the device stops serving pages.
     Returns list of JPEG bytes.
     """
-    out: List[bytes] = []
+    out: list[bytes] = []
     session = session or create_escl_session()
     for _ in range(MAX_DOCS):
         resp = session.get(nextdoc_url, timeout=HTTP_TIMEOUT)
@@ -305,12 +308,11 @@ def escl_fetch_documents(nextdoc_url: str,
 
 
 # ---------------- SANE helpers ----------------
-def list_sane_devices() -> List[Tuple[str, str]]:
+def list_sane_devices() -> list[tuple[str, str]]:
     """Return all devices reported by SANE as (id, description)."""
     proc = subprocess.run(
         ["scanimage", "-L"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -318,7 +320,7 @@ def list_sane_devices() -> List[Tuple[str, str]]:
         stderr = proc.stderr.strip()
         raise RuntimeError(f"scanimage -L failed ({proc.returncode}): {stderr or proc.stdout.strip()}")
 
-    devices: List[Tuple[str, str]] = []
+    devices: list[tuple[str, str]] = []
     for line in proc.stdout.splitlines():
         line = line.strip()
         if not line.startswith("device `"):
@@ -346,14 +348,14 @@ def resolve_sane_device(explicit: str, hint: str) -> str:
 
 
 def sane_scan_to_directory(
-    options: Dict[str, object],
+    options: dict[str, object],
     *,
     dpi: int,
     color_mode: str,
     output_dir: Path,
-    progress_cb: Optional[Callable[[str], None]] = None,
-    job_entry: Optional[Dict[str, object]] = None,
-) -> List[Path]:
+    progress_cb: Callable[[str], None] | None = None,
+    job_entry: dict[str, object] | None = None,
+) -> list[Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     existing = list(output_dir.glob("page-*.png"))
@@ -377,7 +379,7 @@ def sane_scan_to_directory(
 
     batch_pattern = output_dir / "page-%03d.png"
 
-    def execute_scan_command(command: Union[str, List[str]], *, shell: bool) -> Tuple[str, str]:
+    def execute_scan_command(command: str | list[str], *, shell: bool) -> tuple[str, str]:
         if progress_cb:
             progress_cb("scanning - invoking scanimage")
         start_time = time.time()
@@ -390,8 +392,8 @@ def sane_scan_to_directory(
         )
         if job_entry is not None:
             job_entry["process"] = proc
-        stdout_parts: List[str] = []
-        stderr_parts: List[str] = []
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
         try:
             while True:
                 try:
@@ -424,7 +426,9 @@ def sane_scan_to_directory(
             raise RuntimeError(f"scanimage failed ({proc.returncode}): {msg}")
         return stdout_text.strip(), stderr_text.strip()
 
-    print(f"[sane_scan_to_directory] device={device_id} hint={sane_hint} dpi={dpi} mode={sane_mode} dest={batch_pattern}")
+    print(
+        f"[sane_scan_to_directory] device={device_id} hint={sane_hint} dpi={dpi} mode={sane_mode} dest={batch_pattern}"
+    )
 
     if command_template:
         command = command_template.format(
@@ -475,7 +479,7 @@ def sane_scan_to_directory(
     return png_files
 
 
-def preserve_sane_raw_pages(png_files: List[Path], *, job_id: Optional[str]) -> Optional[Path]:
+def preserve_sane_raw_pages(png_files: list[Path], *, job_id: str | None) -> Path | None:
     if not DEBUG_KEEP_SANE_RAW or not png_files:
         return None
     dest_root = DEBUG_RAW_DIR
@@ -509,14 +513,14 @@ def remove_debug_raw(job_id: str) -> None:
 
 
 def scan_with_sane(
-    options: Dict[str, object],
+    options: dict[str, object],
     *,
     dpi: int,
     color_mode: str,
-    processing_opts: Optional[Dict[str, object]],
-    progress_cb: Optional[Callable[[str], None]] = None,
-    job_entry: Optional[Dict[str, object]] = None,
-    job_id: Optional[str] = None,
+    processing_opts: dict[str, object] | None,
+    progress_cb: Callable[[str], None] | None = None,
+    job_entry: dict[str, object] | None = None,
+    job_id: str | None = None,
 ) -> ScanResult:
     tmpdir = Path(tempfile.mkdtemp(prefix="scanjob_"))
     try:
@@ -533,7 +537,7 @@ def scan_with_sane(
         if job_entry is not None and debug_dir is not None:
             job_entry["debug_raw_dir"] = str(debug_dir)
 
-        finalized: List[Image.Image] = []
+        finalized: list[Image.Image] = []
         for png_file in png_files:
             with Image.open(png_file) as pil:
                 pil.load()
@@ -545,12 +549,11 @@ def scan_with_sane(
         print(f"[scan_with_sane] cleaned up {tmpdir}")
 
 
-def collect_saned_logs(limit: int = 80) -> Optional[str]:
+def collect_saned_logs(limit: int = 80) -> str | None:
     try:
         proc = subprocess.run(
             ["journalctl", "-u", "saned.socket", "-n", str(limit), "--no-pager"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
         )
@@ -562,12 +565,12 @@ def collect_saned_logs(limit: int = 80) -> Optional[str]:
     return logs or None
 
 
-def fetch_sane_backend_details(entry: Dict[str, object]) -> Dict[str, object]:
+def fetch_sane_backend_details(entry: dict[str, object]) -> dict[str, object]:
     options = dict(entry.get("options", {}))
     sane_device = str(options.get("sane_device", "") or "")
     sane_hint = str(options.get("sane_hint", "") or entry.get("label", ""))
 
-    details: Dict[str, object] = {
+    details: dict[str, object] = {
         "status": "unknown",
         "configured": {
             "sane_device": sane_device or None,
@@ -591,8 +594,7 @@ def fetch_sane_backend_details(entry: Dict[str, object]) -> Dict[str, object]:
     try:
         proc = subprocess.run(
             ["scanimage", f"--device={resolved_device}", "-A"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             check=False,
             timeout=20,
@@ -613,10 +615,10 @@ def fetch_sane_backend_details(entry: Dict[str, object]) -> Dict[str, object]:
     return details
 
 
-def fetch_escl_backend_details(entry: Dict[str, object]) -> Dict[str, object]:
+def fetch_escl_backend_details(entry: dict[str, object]) -> dict[str, object]:
     url = str(entry.get("default_url") or "")
     auth = entry.get("auth")
-    details: Dict[str, object] = {
+    details: dict[str, object] = {
         "status": "unknown",
         "default_url": url or None,
         "auth_configured": bool(auth and auth[0]),
@@ -651,7 +653,7 @@ def fetch_escl_backend_details(entry: Dict[str, object]) -> Dict[str, object]:
     return details
 
 
-def gather_system_health() -> Dict[str, object]:
+def gather_system_health() -> dict[str, object]:
     severity_rank = {"ok": 0, "warning": 1, "error": 2}
     system_info = {
         "system": platform.system(),
@@ -661,7 +663,7 @@ def gather_system_health() -> Dict[str, object]:
         "python_version": platform.python_version(),
     }
 
-    uptime_seconds: Optional[float] = None
+    uptime_seconds: float | None = None
     if psutil is not None:
         try:
             uptime_seconds = max(0.0, time.time() - psutil.boot_time())
@@ -669,12 +671,12 @@ def gather_system_health() -> Dict[str, object]:
             uptime_seconds = None
     if uptime_seconds is None:
         try:
-            with open("/proc/uptime", "r", encoding="utf-8") as fp:
+            with open("/proc/uptime", encoding="utf-8") as fp:
                 uptime_seconds = float(fp.read().split()[0])
         except Exception:
             uptime_seconds = None
 
-    memory_info: Optional[Dict[str, object]] = None
+    memory_info: dict[str, object] | None = None
     if psutil is not None:
         try:
             mem = psutil.virtual_memory()
@@ -698,7 +700,7 @@ def gather_system_health() -> Dict[str, object]:
         except (ValueError, OSError, AttributeError):
             memory_info = None
 
-    cpu_load: Optional[Dict[str, object]] = None
+    cpu_load: dict[str, object] | None = None
     try:
         load1, load5, load15 = os.getloadavg()  # type: ignore[attr-defined]
         cpu_load = {"load_1": load1, "load_5": load5, "load_15": load15}
@@ -712,10 +714,10 @@ def gather_system_health() -> Dict[str, object]:
         "memory": memory_info,
     }
 
-    components: Dict[str, object] = {}
-    status_scores: List[int] = []
+    components: dict[str, object] = {}
+    status_scores: list[int] = []
 
-    def record(name: str, data: Dict[str, object]) -> None:
+    def record(name: str, data: dict[str, object]) -> None:
         status = str(data.get("status", "unknown")).lower()
         components[name] = data
         status_scores.append(severity_rank.get(status, 1))
@@ -757,14 +759,14 @@ def gather_system_health() -> Dict[str, object]:
         record("saned", {"status": "error", "error": str(exc)})
 
     # eSCL scanners
-    escl_entries: List[Dict[str, object]] = []
+    escl_entries: list[dict[str, object]] = []
     escl_worst = 0
     for scanner_id, entry in SCANNER_REGISTRY.items():
         if entry.get("backend") != "escl":
             continue
         url = entry.get("default_url")
         auth = entry.get("auth")
-        scanner_info: Dict[str, object] = {
+        scanner_info: dict[str, object] = {
             "id": scanner_id,
             "label": entry.get("label"),
             "url": url,
@@ -867,7 +869,7 @@ def trim_white_borders(pil_img: Image.Image, *, threshold: int = 245, padding: i
     return pil_img.crop((left, top, right, bottom))
 
 
-def detect_osd_rotation(pil_img: Image.Image, lang: str = TESSERACT_LANG) -> Optional[int]:
+def detect_osd_rotation(pil_img: Image.Image, lang: str = TESSERACT_LANG) -> int | None:
     try:
         osd = pytesseract.image_to_osd(pil_img.convert("L"), lang=lang, config="--psm 0")
     except pytesseract.TesseractError:
@@ -898,9 +900,8 @@ def finalize_page(
     pil_img: Image.Image,
     *,
     color_mode: str,
-    processing_opts: Optional[Dict[str, object]] = None,
+    processing_opts: dict[str, object] | None = None,
 ) -> Image.Image:
-    opts = processing_opts or {}
     # Cropping and rotation are intentionally disabled to preserve full pages.
     page = pil_img
 
@@ -917,19 +918,23 @@ def finalize_page(
     content_ratio = (gray < 230).mean()
     if content_ratio < 0.01 or not pytesseract.image_to_string(page, lang=TESSERACT_LANG, config="--psm 6").strip():
         fallback = fallback_page.convert(mode)
-        if TARGET_WIDTH > 0 and TARGET_HEIGHT > 0 and (fallback.width > TARGET_WIDTH or fallback.height > TARGET_HEIGHT):
+        if (
+            TARGET_WIDTH > 0
+            and TARGET_HEIGHT > 0
+            and (fallback.width > TARGET_WIDTH or fallback.height > TARGET_HEIGHT)
+        ):
             fallback = ImageOps.contain(fallback, (TARGET_WIDTH, TARGET_HEIGHT), method=Image.LANCZOS)
         page = fallback
     return page
 
 
 # ---------------- PDF assembly ----------------
-def create_pdf_from_images(pages: List[Image.Image], out_path: Path, *, dpi: Optional[int]) -> None:
+def create_pdf_from_images(pages: list[Image.Image], out_path: Path, *, dpi: int | None) -> None:
     """
     Use img2pdf to stitch the provided PIL images into a single PDF.
     """
     effective_dpi = dpi or 300
-    image_streams: List[bytes] = []
+    image_streams: list[bytes] = []
     for img in pages:
         buf = io.BytesIO()
         working = img.convert("RGB") if img.mode not in {"RGB", "L"} else img
@@ -946,7 +951,7 @@ def run_ocr_on_pdf(
     output_pdf: Path,
     *,
     language: str = TESSERACT_LANG,
-    image_dpi: Optional[int] = None,
+    image_dpi: int | None = None,
 ) -> None:
     output_pdf = Path(output_pdf)
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -982,7 +987,7 @@ def reocr_pdf(
     *,
     color_mode: str,
     dpi: int = 300,
-    output_pdf: Optional[Path] = None,
+    output_pdf: Path | None = None,
 ) -> Path:
     input_pdf = input_pdf.resolve()
     if output_pdf is None:
@@ -1001,21 +1006,20 @@ def reocr_pdf(
     return output_pdf
 
 
-
 # ---------------- Main scanning policy ----------------
 def capture_es_580w_letter_duplex_raw(
     base_url: str,
     dpi: int,
     color_mode: str,
     *,
-    session: Optional[requests.Session] = None,
-) -> List[bytes]:
+    session: requests.Session | None = None,
+) -> list[bytes]:
     session = session or create_escl_session()
     try:
         existing_jobs = escl_scan.list_jobs(session, base_url)
     except (requests.HTTPError, requests.RequestException):
         existing_jobs = []
-    for job_uri, job_state in existing_jobs:
+    for job_uri, _job_state in existing_jobs:
         if not job_uri:
             continue
         cleanup_url = f"{base_url.rstrip('/')}/{job_uri.lstrip('/')}"
@@ -1058,8 +1062,8 @@ def capture_et_3850_platen_raw(
     dpi: int,
     color_mode: str,
     *,
-    session: Optional[requests.Session] = None,
-) -> List[bytes]:
+    session: requests.Session | None = None,
+) -> list[bytes]:
     session = session or create_escl_session()
     caps = escl_scan.fetch_capabilities(session, base_url)
     if color_mode not in caps.color_modes:
@@ -1086,7 +1090,7 @@ def capture_et_3850_platen_raw(
             if exc.response is not None and exc.response.status_code == 503 and attempt < max_attempts - 1:
                 retry_after = exc.response.headers.get("Retry-After")
                 delay = float(retry_after) if retry_after else 2.0
-                for job_uri, job_state in escl_scan.list_jobs(session, base_url):
+                for job_uri, _job_state in escl_scan.list_jobs(session, base_url):
                     if not job_uri:
                         continue
                     cleanup_url = f"{base_url.rstrip('/')}/{job_uri.lstrip('/')}"
@@ -1103,11 +1107,13 @@ def capture_et_3850_platen_raw(
     return [jpeg_bytes]
 
 
-def scan_es_580w_letter_duplex(base_url: str,
-                               dpi: int,
-                               color_mode: str,
-                               session: Optional[requests.Session] = None,
-                               processing_opts: Optional[Dict[str, object]] = None) -> List[Image.Image]:
+def scan_es_580w_letter_duplex(
+    base_url: str,
+    dpi: int,
+    color_mode: str,
+    session: requests.Session | None = None,
+    processing_opts: dict[str, object] | None = None,
+) -> list[Image.Image]:
     """
     ES-580W: force ADF duplex, Letter size, scan both sides.
     """
@@ -1119,25 +1125,30 @@ def scan_es_580w_letter_duplex(base_url: str,
     ]
 
 
-def scan_et_3850_platen(base_url: str,
-                        dpi: int,
-                        color_mode: str,
-                        session: Optional[requests.Session] = None,
-                        processing_opts: Optional[Dict[str, object]] = None) -> List[Image.Image]:
+def scan_et_3850_platen(
+    base_url: str,
+    dpi: int,
+    color_mode: str,
+    session: requests.Session | None = None,
+    processing_opts: dict[str, object] | None = None,
+) -> list[Image.Image]:
     """
     ET-3850: scan from flatbed (platen), then deskew/trim.
     (Most devices only return one page for platen; we support more if available.)
     """
     jpeg_pages = capture_et_3850_platen_raw(base_url, dpi, color_mode, session=session)
-    return [finalize_page(Image.open(io.BytesIO(jpeg_bytes)), color_mode=color_mode, processing_opts=processing_opts) for jpeg_bytes in jpeg_pages]
+    return [
+        finalize_page(Image.open(io.BytesIO(jpeg_bytes)), color_mode=color_mode, processing_opts=processing_opts)
+        for jpeg_bytes in jpeg_pages
+    ]
 
 
-def build_scanner_registry() -> Dict[str, Dict[str, object]]:
+def build_scanner_registry() -> dict[str, dict[str, object]]:
     legacy_runners = {
         "et3850": scan_et_3850_platen,
         "es580w": scan_es_580w_letter_duplex,
     }
-    registry: Dict[str, Dict[str, object]] = {}
+    registry: dict[str, dict[str, object]] = {}
     for section in CONFIG.sections():
         if not section.startswith("scanner:"):
             continue
@@ -1161,7 +1172,7 @@ def build_scanner_registry() -> Dict[str, Dict[str, object]]:
                 "page_height_mm": _cfg_get_float(section, "page_height_mm", 0.0),
                 "final_reduce_command": CONFIG.get(section, "final_reduce_command", fallback="").strip(),
             }
-            entry: Dict[str, object] = {
+            entry: dict[str, object] = {
                 "label": label,
                 "default_color_mode": default_color_mode,
                 "backend": "sane",
@@ -1201,7 +1212,7 @@ if not SCANNER_REGISTRY:
 DB_PATH = Path(os.getenv("SCAN_DB_PATH", "scan_jobs.sqlite3")).expanduser()
 
 
-def normalize_crop_box(values: Optional[List[float]]) -> Optional[Tuple[float, float, float, float]]:
+def normalize_crop_box(values: list[float] | None) -> tuple[float, float, float, float] | None:
     if values is None:
         return None
     if len(values) != 4:
@@ -1215,7 +1226,7 @@ def normalize_crop_box(values: Optional[List[float]]) -> Optional[Tuple[float, f
     return left, top, right, bottom
 
 
-def determine_color_mode(requested: Optional[str], *, force_color: bool, default_mode: str) -> str:
+def determine_color_mode(requested: str | None, *, force_color: bool, default_mode: str) -> str:
     if force_color:
         return "RGB24"
     if requested:
@@ -1291,9 +1302,10 @@ class JobStore:
                 return func()
             raise
 
-    def create_job(self, job_id: str, scanner: str, params: Dict[str, object]) -> None:
+    def create_job(self, job_id: str, scanner: str, params: dict[str, object]) -> None:
         now = datetime.utcnow().isoformat()
         payload = json.dumps(params)
+
         def _insert() -> None:
             with self.lock, self._connect() as conn:
                 conn.execute(
@@ -1311,20 +1323,21 @@ class JobStore:
         job_id: str,
         *,
         status: str,
-        result_path: Optional[Path] = None,
-        error: Optional[str] = None,
-        stage: Optional[str] = None,
-        stage_detail: Optional[str] = None,
-        number_of_pages: Optional[int] = None,
-        batch_count: Optional[int] = None,
-        batches_completed: Optional[int] = None,
+        result_path: Path | None = None,
+        error: str | None = None,
+        stage: str | None = None,
+        stage_detail: str | None = None,
+        number_of_pages: int | None = None,
+        batch_count: int | None = None,
+        batches_completed: int | None = None,
     ) -> None:
         now = datetime.utcnow().isoformat()
         result_value = str(result_path) if result_path else None
+
         def _update() -> None:
             with self.lock, self._connect() as conn:
                 assignments = ["status = ?", "result_path = ?", "error = ?", "updated_at = ?"]
-                values: List[object] = [status, result_value, error, now]
+                values: list[object] = [status, result_value, error, now]
                 if stage is not None:
                     assignments.append("stage = ?")
                     values.append(stage)
@@ -1347,14 +1360,14 @@ class JobStore:
         self._with_schema_retry(_update)
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> Dict[str, object]:
+    def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
         data = dict(row)
         params = data.get("params")
         data["params"] = json.loads(params) if params else None
         return data
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, object]]:
-        def _lookup() -> Optional[Dict[str, object]]:
+    def get_job(self, job_id: str) -> dict[str, object] | None:
+        def _lookup() -> dict[str, object] | None:
             with self._connect() as conn:
                 row = conn.execute("SELECT * FROM scan_jobs WHERE id = ?", (job_id,)).fetchone()
             if not row:
@@ -1370,8 +1383,8 @@ class JobStore:
 
         self._with_schema_retry(_delete)
 
-    def list_jobs(self, *, offset: int, limit: int) -> Tuple[List[Dict[str, object]], int]:
-        def _list() -> Tuple[List[Dict[str, object]], int]:
+    def list_jobs(self, *, offset: int, limit: int) -> tuple[list[dict[str, object]], int]:
+        def _list() -> tuple[list[dict[str, object]], int]:
             with self._connect() as conn:
                 total = conn.execute("SELECT COUNT(*) FROM scan_jobs").fetchone()[0]
                 rows = conn.execute(
@@ -1384,13 +1397,13 @@ class JobStore:
 
 
 JOB_STORE = JobStore(DB_PATH)
-JOB_QUEUE: "queue.Queue[Optional[str]]" = queue.Queue()
-PENDING_JOBS: Dict[str, Dict[str, object]] = {}
+JOB_QUEUE: "queue.Queue[str | None]" = queue.Queue()
+PENDING_JOBS: dict[str, dict[str, object]] = {}
 PENDING_LOCK = threading.Lock()
-CANCELLED_JOBS: Set[str] = set()
+CANCELLED_JOBS: set[str] = set()
 
 
-def serialize_job(job: Dict[str, object]) -> Dict[str, object]:
+def serialize_job(job: dict[str, object]) -> dict[str, object]:
     data = dict(job)
     data.pop("params", None)
     if "batch_count" in data:
@@ -1418,10 +1431,10 @@ def dispatch_scan(
     *,
     dpi: int,
     color_mode: str,
-    processing_opts: Dict[str, object],
-    progress_cb: Optional[Callable[[str], None]] = None,
-    job_entry: Optional[Dict[str, object]] = None,
-    job_id: Optional[str] = None,
+    processing_opts: dict[str, object],
+    progress_cb: Callable[[str], None] | None = None,
+    job_entry: dict[str, object] | None = None,
+    job_id: str | None = None,
 ) -> ScanResult:
     if scanner_key not in SCANNER_REGISTRY:
         raise RuntimeError(f"Unknown scanner: {scanner_key}")
@@ -1458,7 +1471,7 @@ class JobWorker(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
         self.stop_event = threading.Event()
-        self.running_jobs: Dict[str, Dict[str, object]] = {}
+        self.running_jobs: dict[str, dict[str, object]] = {}
 
     def shutdown(self) -> None:
         self.stop_event.set()
@@ -1491,7 +1504,7 @@ class JobWorker(threading.Thread):
             self._process(job_id, payload)
             JOB_QUEUE.task_done()
 
-    def _process(self, job_id: str, payload: Dict[str, object]) -> None:
+    def _process(self, job_id: str, payload: dict[str, object]) -> None:
         try:
             print(f"[worker] starting job {job_id} with payload {payload}")
             JOB_STORE.update_job(job_id, status="running", stage="scanning", stage_detail="starting")
@@ -1503,7 +1516,7 @@ class JobWorker(threading.Thread):
                 "process": None,
             }
 
-            def update_stage(stage: str, detail: Optional[str] = None) -> None:
+            def update_stage(stage: str, detail: str | None = None) -> None:
                 normalized = stage if stage in STAGE_STATES else "scanning"
                 JOB_STORE.update_job(job_id, status="running", stage=normalized, stage_detail=detail)
                 entry = self.running_jobs.get(job_id)
@@ -1546,7 +1559,7 @@ class JobWorker(threading.Thread):
                     import pikepdf
 
                     with pikepdf.Pdf.open(tmp_raw_path) as pdf:
-                        chunk_paths: List[Path] = []
+                        chunk_paths: list[Path] = []
                         for idx in range(total_batches):
                             start = idx * batch_size
                             end = min(start + batch_size, len(pdf.pages))
@@ -1557,15 +1570,19 @@ class JobWorker(threading.Thread):
                             chunk_pdf.save(chunk_file)
                             chunk_paths.append(chunk_file)
 
-                    ocr_chunk_paths: List[Path] = []
+                    ocr_chunk_paths: list[Path] = []
                     for idx, chunk_path in enumerate(chunk_paths, start=1):
                         label = f"batch {idx}/{total_batches}"
                         update_stage("ocr", label)
-                        JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx - 1)
+                        JOB_STORE.update_job(
+                            job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx - 1
+                        )
                         ocr_out = chunk_path.with_suffix(".ocr.pdf")
                         run_ocr_on_pdf(chunk_path, ocr_out, image_dpi=job_dpi)
                         ocr_chunk_paths.append(ocr_out)
-                        JOB_STORE.update_job(job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx)
+                        JOB_STORE.update_job(
+                            job_id, status="running", stage="ocr", stage_detail=label, batches_completed=idx
+                        )
 
                     update_stage("merging")
                     JOB_STORE.update_job(job_id, status="running", stage="merging", stage_detail=None)
@@ -1836,13 +1853,15 @@ INDEX_HTML = """
 </body>
 </html>
 """
+
+
 class ScanRequest(BaseModel):
     scanner: str = Field(
         ...,
         description="Scanner identifier from configuration (e.g., 'et3850' or 'es580w')",
         examples=["et3850", "es580w"],
     )
-    dpi: Optional[int] = Field(
+    dpi: int | None = Field(
         None,
         ge=75,
         le=1200,
@@ -1862,16 +1881,16 @@ class ScanJob(BaseModel):
     id: str
     scanner: str
     status: str
-    result_path: Optional[str] = None
-    error: Optional[str] = None
+    result_path: str | None = None
+    error: str | None = None
     created_at: str
     updated_at: str
-    stage: Optional[str] = None
-    stage_detail: Optional[str] = None
-    number_of_pages: Optional[int] = None
-    ocr_batch_count: Optional[int] = None
-    ocr_batches_completed: Optional[int] = None
-    duration_seconds: Optional[float] = None
+    stage: str | None = None
+    stage_detail: str | None = None
+    number_of_pages: int | None = None
+    ocr_batch_count: int | None = None
+    ocr_batches_completed: int | None = None
+    duration_seconds: float | None = None
 
     class Config:
         extra = "ignore"
@@ -1881,7 +1900,7 @@ class ScanJobPage(BaseModel):
     page: int
     page_size: int
     total: int
-    items: List[ScanJob]
+    items: list[ScanJob]
 
 
 class ScannerInfo(BaseModel):
@@ -1889,7 +1908,7 @@ class ScannerInfo(BaseModel):
     label: str
     backend: str
     backend_status: str
-    configured_device: Optional[str] = None
+    configured_device: str | None = None
     in_use: bool
 
 
@@ -1897,9 +1916,9 @@ class ScannerDetails(BaseModel):
     id: str
     label: str
     backend: str
-    backend_status: Optional[str] = None
-    configured_device: Optional[str] = None
-    backend_details: Optional[Dict[str, Any]] = None
+    backend_status: str | None = None
+    configured_device: str | None = None
+    backend_details: dict[str, Any] | None = None
     in_use: bool
 
 
@@ -1932,17 +1951,14 @@ def _shutdown() -> None:
         JOB_WORKER.join(timeout=10)
 
 
-@app.get("/api/scanners", tags=["scanners"], summary="List configured scanners", response_model=List[ScannerInfo])
-def list_scanners() -> List[ScannerInfo]:
-    out: List[Dict[str, object]] = []
+@app.get("/api/scanners", tags=["scanners"], summary="List configured scanners", response_model=list[ScannerInfo])
+def list_scanners() -> list[ScannerInfo]:
+    out: list[dict[str, object]] = []
     for key, entry in SCANNER_REGISTRY.items():
         backend = entry.get("backend", "sane")
         backend_status = "unknown"
-        configured_device: Optional[str] = None
-        in_use = any(
-            (job.get("payload", {}) or {}).get("scanner") == key
-            for job in JOB_WORKER.running_jobs.values()
-        )
+        configured_device: str | None = None
+        in_use = any((job.get("payload", {}) or {}).get("scanner") == key for job in JOB_WORKER.running_jobs.values())
         if backend == "sane":
             details = fetch_sane_backend_details(entry)
             backend_status = details.get("status", "unknown")
@@ -1973,7 +1989,7 @@ def get_scanner_details(scanner_id: str) -> ScannerDetails:
     if not entry:
         raise HTTPException(status_code=404, detail=f"Unknown scanner '{scanner_id}'")
     backend = entry.get("backend", "sane")
-    details: Dict[str, object] = {
+    details: dict[str, object] = {
         "id": scanner_id,
         "label": entry.get("label"),
         "backend": backend,
@@ -1986,11 +2002,16 @@ def get_scanner_details(scanner_id: str) -> ScannerDetails:
     else:
         details["backend_details"] = {"status": "error", "error": f"Unsupported backend '{backend}'"}
     in_use = any(
-        (job.get("payload", {}) or {}).get("scanner") == scanner_id
-        for job in JOB_WORKER.running_jobs.values()
+        (job.get("payload", {}) or {}).get("scanner") == scanner_id for job in JOB_WORKER.running_jobs.values()
     )
-    details["backend_status"] = details.get("backend_details", {}).get("status") if isinstance(details.get("backend_details"), dict) else None
-    details["configured_device"] = details.get("backend_details", {}).get("configured", {}).get("sane_device") if backend == "sane" else details.get("backend_details", {}).get("default_url")
+    details["backend_status"] = (
+        details.get("backend_details", {}).get("status") if isinstance(details.get("backend_details"), dict) else None
+    )
+    details["configured_device"] = (
+        details.get("backend_details", {}).get("configured", {}).get("sane_device")
+        if backend == "sane"
+        else details.get("backend_details", {}).get("default_url")
+    )
     details["in_use"] = in_use
     # prune default_color_mode from response_model; backend_details may still contain it
     details.pop("default_color_mode", None)
@@ -1998,7 +2019,7 @@ def get_scanner_details(scanner_id: str) -> ScannerDetails:
 
 
 @app.get("/api/system", tags=["system"], summary="Overall system health and status")
-def get_system_status() -> Dict[str, object]:
+def get_system_status() -> dict[str, object]:
     return gather_system_health()
 
 
