@@ -1,0 +1,31 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove venv
+        rm -rf /opt/page-the-ripper/.venv
+
+        # Remove runtime data
+        rm -rf /var/lib/page-the-ripper
+
+        # Remove config directory
+        rm -rf /etc/page-the-ripper
+
+        # Remove system user
+        if id -u pageripper >/dev/null 2>&1; then
+            deluser --quiet pageripper 2>/dev/null || true
+        fi
+        if getent group pageripper >/dev/null 2>&1; then
+            delgroup --quiet pageripper 2>/dev/null || true
+        fi
+
+        systemctl daemon-reload
+        ;;
+
+    remove|upgrade)
+        systemctl daemon-reload
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,19 @@
+[Unit]
+Description=Page the Ripper scanning service
+After=network.target
+
+[Service]
+Type=simple
+User=pageripper
+Group=pageripper
+SupplementaryGroups=scanner lp
+WorkingDirectory=/opt/page-the-ripper
+Environment=SCANNER_CFG=/etc/page-the-ripper/scanner.cfg
+Environment=SCAN_DB_PATH=/var/lib/page-the-ripper/scan_jobs.sqlite3
+Environment=SCAN_OUTPUT_DIR=/var/lib/page-the-ripper/scans
+ExecStart=/opt/page-the-ripper/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

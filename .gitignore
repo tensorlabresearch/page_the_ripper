@@ -12,3 +12,4 @@ scans/
 .pytest_cache/
 *.pyc
 .ruff_cache/
+debian/build/
