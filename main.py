@@ -4,11 +4,11 @@ import json
 import math
 import os
 import platform
-import sys
 import queue
 import shlex
 import shutil
 import sqlite3
+import sys
 import subprocess
 import tempfile
 import threading
