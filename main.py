@@ -8,8 +8,8 @@ import queue
 import shlex
 import shutil
 import sqlite3
-import sys
 import subprocess
+import sys
 import tempfile
 import threading
 import time
