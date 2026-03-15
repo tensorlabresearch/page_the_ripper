@@ -1705,7 +1705,9 @@ class JobMonitor(threading.Thread):
                         if stage_detail:
                             error_msg += f" ({stage_detail})"
 
-                        print(f"[monitor] Marking orphaned job {job_id} as failed (age: {int(age_seconds)}s, stage: {stage})")
+                        print(
+                            f"[monitor] Marking orphaned job {job_id} as failed (age: {int(age_seconds)}s, stage: {stage})"
+                        )
                         JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
                     else:
                         job_entry = JOB_WORKER.running_jobs.get(job_id, {})
@@ -1724,7 +1726,9 @@ class JobMonitor(threading.Thread):
                                         if stage_detail:
                                             error_msg += f" Last stage detail: {stage_detail}"
 
-                                        print(f"[monitor] Marking job {job_id} as failed (process died with code {poll_result})")
+                                        print(
+                                            f"[monitor] Marking job {job_id} as failed (process died with code {poll_result})"
+                                        )
                                         JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
                                         JOB_WORKER.running_jobs.pop(job_id, None)
                             except Exception as check_exc:
@@ -1738,7 +1742,9 @@ class JobMonitor(threading.Thread):
                             if stage_detail:
                                 error_msg += f" Last stage detail: {stage_detail}"
 
-                            print(f"[monitor] Marking stuck job {job_id} as failed (age: {int(age_seconds)}s, no process)")
+                            print(
+                                f"[monitor] Marking stuck job {job_id} as failed (age: {int(age_seconds)}s, no process)"
+                            )
                             JOB_STORE.update_job(job_id, status="failed", error=error_msg, stage="failed")
                             JOB_WORKER.running_jobs.pop(job_id, None)
 
@@ -1748,6 +1754,7 @@ class JobMonitor(threading.Thread):
 
 
 _cleanup_already_run = False
+
 
 def cleanup_orphaned_jobs_on_startup() -> None:
     """Mark any running/pending jobs from previous instance as failed."""
