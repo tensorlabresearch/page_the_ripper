@@ -1,5 +1,11 @@
 This is a project for scanning and OCRing content from Epson network connected scanners and creating a text-selectable and searchable PDF as a result.
 
+## Git
+
+- **Default branch is `main`.** There is no `master` branch. Always push to `main`.
+- **Remote:** `git@github_personal:tensorlabresearch/page_the_ripper.git`
+- **GitHub account:** `kai5263499` (never `wwidner-ch`)
+
 The project runs in a venv activated with `source .venv/bin/activate`.
 
 ### Epson Scanners Targeted
