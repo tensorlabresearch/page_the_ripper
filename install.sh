@@ -3,11 +3,11 @@
 # Install (or upgrade) Page the Ripper from the latest GitHub release.
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/kai5263499/page_the_ripper/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/tensorlabresearch/page_the_ripper/main/install.sh | sudo bash
 #
 set -euo pipefail
 
-REPO="kai5263499/page_the_ripper"
+REPO="tensorlabresearch/page_the_ripper"
 TMP_DEB="/tmp/page-the-ripper.deb"
 
 echo "==> Page the Ripper installer"

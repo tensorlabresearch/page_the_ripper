@@ -20,7 +20,7 @@ Built with FastAPI and designed to run headless on a Raspberry Pi or any Debian-
 On a Raspberry Pi or any Debian/Ubuntu system:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kai5263499/page_the_ripper/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/tensorlabresearch/page_the_ripper/main/install.sh | sudo bash
 ```
 
 This will:
@@ -99,7 +99,7 @@ The package also includes standalone CLI scripts that can be run outside the RES
 ## Building the .deb from source
 
 ```bash
-git clone https://github.com/kai5263499/page_the_ripper.git
+git clone https://github.com/tensorlabresearch/page_the_ripper.git
 cd page_the_ripper
 debian/build.sh
 # Output: debian/build/page-the-ripper_1.0.0_all.deb
