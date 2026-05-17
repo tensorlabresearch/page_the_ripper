@@ -14,6 +14,9 @@ Environment=SCAN_OUTPUT_DIR=/var/lib/page-the-ripper/scans
 ExecStart=/opt/page-the-ripper/.venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
+# Allow in-flight scans to finish on stop. Long ADF runs plus OCR can take
+# many minutes; matches SCAN_SHUTDOWN_JOIN_TIMEOUT in main.py.
+TimeoutStopSec=900
 
 [Install]
 WantedBy=multi-user.target

@@ -17,6 +17,17 @@ STAGE="debian/build/${PKG}_${VERSION}_all"
 
 echo "Building ${PKG} ${VERSION} ..."
 
+# -- UI bundle (built via npm) --
+# Skip with SKIP_UI_BUILD=1 if you've already built ui/dist or are intentionally shipping without UI.
+if [ "${SKIP_UI_BUILD:-0}" != "1" ]; then
+    if [ ! -d ui ]; then
+        echo "warning: ui/ directory missing — package will be built without the SPA frontend"
+    else
+        echo "Building UI bundle..."
+        (cd ui && npm ci --no-audit --no-fund && npm run build)
+    fi
+fi
+
 # Clean previous build
 rm -rf debian/build
 mkdir -p "$STAGE"
@@ -26,6 +37,15 @@ mkdir -p "$STAGE/opt/page-the-ripper/tools"
 cp main.py scan_local.py "$STAGE/opt/page-the-ripper/"
 cp scanner.cfg.example "$STAGE/opt/page-the-ripper/"
 cp debian/requirements-runtime.txt "$STAGE/opt/page-the-ripper/requirements.txt"
+
+# -- UI assets --
+if [ -d ui/dist ]; then
+    mkdir -p "$STAGE/opt/page-the-ripper/ui/dist"
+    cp -r ui/dist/. "$STAGE/opt/page-the-ripper/ui/dist/"
+    echo "Bundled UI: $(du -sh ui/dist | cut -f1)"
+else
+    echo "warning: ui/dist not found; package will have no SPA frontend"
+fi
 
 # tools/ directory
 cp tools/escl_scan.py tools/scan_cli.py "tools/_escl-scan.py" \

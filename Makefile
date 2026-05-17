@@ -34,3 +34,15 @@ tmux-attach:
 start-uvicorn:
 	@echo "Starting uvicorn (foreground run)..."
 	$(UVICORN_CMD)
+
+.PHONY: ui-install
+ui-install:
+	cd ui && npm ci --no-audit --no-fund
+
+.PHONY: ui-build
+ui-build:
+	cd ui && npm run build
+
+.PHONY: ui-dev
+ui-dev:
+	cd ui && npm run dev

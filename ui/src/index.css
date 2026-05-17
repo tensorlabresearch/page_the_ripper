@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-50: #ecfeff;
+  --color-brand-400: #22d3ee;
+  --color-brand-500: #06b6d4;
+  --color-brand-600: #0891b2;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@utility btn {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+         transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+         transition-colors disabled:cursor-not-allowed disabled:opacity-50
+         bg-brand-500 text-slate-950 hover:bg-brand-400;
+}
+@utility btn-ghost {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+         transition-colors disabled:cursor-not-allowed disabled:opacity-50
+         border border-slate-700 text-slate-200 hover:bg-slate-800;
+}
+@utility btn-danger {
+  @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+         transition-colors disabled:cursor-not-allowed disabled:opacity-50
+         border border-rose-700 text-rose-300 hover:bg-rose-950;
+}
+@utility card {
+  @apply rounded-lg border border-slate-800 bg-slate-900/60 p-4 shadow;
+}
+@utility field {
+  @apply flex flex-col gap-1.5 text-sm;
+}
+@utility input {
+  @apply rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm
+         text-slate-100 focus:border-brand-500 focus:outline-none;
+}
+@utility badge {
+  @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+}
+
+@utility icon-btn {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-md
+         border border-slate-700 text-slate-200 transition-colors
+         hover:bg-slate-800 hover:text-brand-400
+         disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility icon-btn-primary {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-md
+         bg-brand-500 text-slate-950 transition-colors
+         hover:bg-brand-400
+         disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility icon-btn-danger {
+  @apply inline-flex h-8 w-8 items-center justify-center rounded-md
+         border border-rose-800 text-rose-300 transition-colors
+         hover:bg-rose-950 hover:text-rose-200
+         disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.field label,
+.field > span:first-child {
+  color: var(--color-slate-300);
+}
+
+/* react-image-crop's child wrapper is shrink-to-content by default, so an
+   img with width:100% resolves to the image's natural size and overflows
+   the whole page. Force the wrapper to fill its parent. */
+.ReactCrop,
+.ReactCrop__child-wrapper {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}

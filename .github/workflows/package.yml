@@ -1,0 +1,80 @@
+name: Build .deb artifact
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Override version string (default: <control-version>+ci.<run>.<sha>)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'ui/package-lock.json'
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          OVERRIDE='${{ inputs.version }}'
+          if [ -n "$OVERRIDE" ]; then
+            VERSION="$OVERRIDE"
+          else
+            BASE=$(grep '^Version:' debian/control | awk '{print $2}')
+            SHORT_SHA=$(git rev-parse --short=8 HEAD)
+            VERSION="${BASE}+ci.${{ github.run_number }}.${SHORT_SHA}"
+          fi
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "deb=page-the-ripper_${VERSION}_all.deb" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Build .deb
+        run: |
+          chmod +x debian/build.sh
+          debian/build.sh "${{ steps.version.outputs.version }}"
+
+      - name: Inspect built package
+        run: |
+          set -euo pipefail
+          DEB=$(ls debian/build/*.deb | head -1)
+          echo "Built: $DEB"
+          ls -lh "$DEB"
+          dpkg-deb -I "$DEB"
+          echo '--- contents (first 50) ---'
+          dpkg-deb -c "$DEB" | head -50
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.deb }}
+          path: debian/build/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### Built \`${{ steps.version.outputs.deb }}\`"
+            echo ""
+            echo "Download from the **Artifacts** section above, then on the target Pi:"
+            echo ""
+            echo '```bash'
+            echo "scp ${{ steps.version.outputs.deb }} pi@<host>:/tmp/"
+            echo "ssh pi@<host> 'sudo apt-get update && sudo apt-get install -y /tmp/${{ steps.version.outputs.deb }} && sudo systemctl restart page-the-ripper'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

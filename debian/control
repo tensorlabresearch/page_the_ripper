@@ -7,7 +7,7 @@ Description: Scan, OCR, and build searchable PDFs from Epson network scanners
  cleanup, and produces text-searchable PDFs via OCRmyPDF.
 Depends: python3 (>= 3.11), python3-venv, python3-dev, sane-utils,
  tesseract-ocr, tesseract-ocr-eng, ghostscript, libxml2-dev, libxslt1-dev,
- libjpeg-dev, zlib1g-dev, libqpdf-dev
+ libjpeg-dev, zlib1g-dev, libqpdf-dev, poppler-utils
 Recommends: unpaper, pngquant
 Section: utils
 Priority: optional
