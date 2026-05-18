@@ -27,6 +27,8 @@ export type ScanJob = {
   duration_seconds: number | null;
   recovery_available?: boolean;
   created_via?: string | null;
+  result_size_bytes?: number | null;
+  result_dpi?: number | null;
   tags?: string[];
 };
 

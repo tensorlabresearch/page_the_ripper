@@ -1876,6 +1876,24 @@ def serialize_job(job: dict[str, object]) -> dict[str, object]:
         and Path(str(recovery_path)).is_dir()
     )
     data["created_via"] = _compute_created_via(params)
+    # On-disk file size and effective DPI of the result PDF. Computed via a
+    # cheap os.stat() rather than opening the PDF — for a 500-row job list
+    # we don't want to touch pikepdf 500 times.
+    size_bytes: int | None = None
+    dpi: int | None = None
+    rp = data.get("result_path")
+    if rp:
+        try:
+            stat_result = Path(str(rp)).stat()
+            size_bytes = stat_result.st_size
+        except OSError:
+            size_bytes = None
+    if isinstance(params, dict):
+        raw_dpi = params.get("dpi")
+        if isinstance(raw_dpi, (int, float)) and raw_dpi > 0:
+            dpi = int(raw_dpi)
+    data["result_size_bytes"] = size_bytes
+    data["result_dpi"] = dpi
     if "batch_count" in data:
         data["ocr_batch_count"] = data.pop("batch_count")
     if "batches_completed" in data:
@@ -2332,10 +2350,10 @@ class ScanRequest(BaseModel):
     )
     dpi: int | None = Field(
         None,
-        ge=75,
+        ge=50,
         le=1200,
         description="Optional DPI override; defaults to configured scanner DPI when omitted",
-        examples=[300, 600, 1200],
+        examples=[92, 100, 300],
     )
 
 
@@ -2362,6 +2380,8 @@ class ScanJob(BaseModel):
     duration_seconds: float | None = None
     recovery_available: bool = False
     created_via: str | None = None
+    result_size_bytes: int | None = None
+    result_dpi: int | None = None
     tags: list[str] = []
 
     class Config:
@@ -2966,7 +2986,7 @@ class CropRequest(BaseModel):
         examples=[[0.0, 0.05, 1.0, 0.95]],
     )
     reocr: bool = Field(True, description="Re-run OCR on the cropped output to keep it searchable.")
-    dpi: int = Field(300, ge=75, le=1200, description="Render DPI used to rasterize each page during cropping.")
+    dpi: int = Field(300, ge=50, le=1200, description="Render DPI used to rasterize each page during cropping.")
     rotation: float = Field(
         0.0,
         ge=-360.0,

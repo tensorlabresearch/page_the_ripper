@@ -27,6 +27,15 @@ export default function CropPage() {
   const [crop, setCrop] = useState<PercentCrop | undefined>();
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   const [rotation, setRotation] = useState(0);
+  // DPI controls the rasterization quality the crop worker uses on each page.
+  // Default 92 mirrors the New Scan default; lower than 92 looks too soft.
+  const [dpi, setDpi] = useState<number>(92);
+
+  const DPI_PRESETS: { label: string; value: number; hint: string }[] = [
+    { label: 'Text', value: 92, hint: 'Small files; best for typed pages' },
+    { label: 'Cover', value: 100, hint: 'Mixed text + image' },
+    { label: 'HQ', value: 300, hint: 'High quality for OCR or fine detail' },
+  ];
   const [displaySrc, setDisplaySrc] = useState<string>('');
   const [rotating, setRotating] = useState(false);
 
@@ -280,6 +289,43 @@ export default function CropPage() {
             </div>
             </div>
 
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span>DPI</span>
+                <span className="font-mono text-slate-300">{dpi}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {DPI_PRESETS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    className={
+                      dpi === p.value
+                        ? 'btn-primary justify-center text-xs'
+                        : 'btn-ghost justify-center text-xs'
+                    }
+                    onClick={() => setDpi(p.value)}
+                    title={p.hint}
+                  >
+                    {p.label} · {p.value}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="number"
+                className="input mt-1 w-full"
+                min={50}
+                max={1200}
+                step={25}
+                value={dpi}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n > 0) setDpi(Math.max(50, Math.min(1200, n)));
+                }}
+                aria-label="DPI"
+              />
+            </div>
+
             <button
               type="button"
               className="btn-ghost w-full justify-center"
@@ -315,7 +361,7 @@ export default function CropPage() {
               disabled={!normalizedBox || submit.isPending}
               onClick={() => {
                 if (!normalizedBox) return;
-                submit.mutate({ box: normalizedBox, reocr, rotation });
+                submit.mutate({ box: normalizedBox, reocr, rotation, dpi });
               }}
             >
               {submit.isPending ? 'Submitting…' : 'Create cropped scan'}

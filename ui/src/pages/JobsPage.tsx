@@ -5,9 +5,9 @@ import { api, type ScanJob } from '../api';
 import StatusBadge from '../components/StatusBadge';
 import ErrorCard from '../components/ErrorCard';
 import Spinner from '../components/Spinner';
-import { CropIcon, DownloadIcon, EyeIcon, RecoverIcon, ResumeIcon, RetryIcon, TrashIcon } from '../components/Icon';
+import { DownloadIcon, EditIcon, EyeIcon, RecoverIcon, ResumeIcon, RetryIcon, TrashIcon } from '../components/Icon';
 import { TagEditor, TagFilterBar, useTagsMutation } from '../components/Tags';
-import { duration, formatTimestamp } from '../lib/format';
+import { bytes, duration, formatTimestamp } from '../lib/format';
 
 const PAGE_SIZE = 25;
 
@@ -74,7 +74,17 @@ function JobRow({
         </div>
       </td>
       <td className="px-3 py-2 text-sm text-slate-300">
-        {job.number_of_pages ?? '—'}
+        <div>{job.number_of_pages ?? '—'}</div>
+        {(job.result_size_bytes != null || job.result_dpi != null) && (
+          <div className="text-[10px] text-slate-500">
+            {[
+              job.result_size_bytes != null ? bytes(job.result_size_bytes) : null,
+              job.result_dpi != null ? `${job.result_dpi} DPI` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        )}
       </td>
       <td className="px-3 py-2 text-sm text-slate-300">
         {duration(job.duration_seconds)}
@@ -104,10 +114,10 @@ function JobRow({
               <Link
                 className="icon-btn"
                 to={`/jobs/${job.id}/crop`}
-                title="Crop this scan"
-                aria-label="Crop"
+                title="Edit (crop, rotate, re-OCR) this scan"
+                aria-label="Edit scan"
               >
-                <CropIcon />
+                <EditIcon />
               </Link>
             </>
           )}

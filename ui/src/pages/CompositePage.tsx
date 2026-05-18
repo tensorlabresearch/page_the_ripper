@@ -47,7 +47,10 @@ export default function CompositePage() {
   });
 
   const [order, setOrder] = useState<string[]>([]);
-  const [reocr, setReocr] = useState(true);
+  // Default to NOT re-running OCR. ocrmypdf reprocesses every page and can
+  // multiply the output file size; the source PDFs already have their own
+  // OCR text layers that concatenate fine without a re-pass.
+  const [reocr, setReocr] = useState(false);
 
   const addTagFilter = (tag: string) => {
     if (activeTags.includes(tag)) return;

@@ -13,8 +13,16 @@ export default function NewScanPage() {
   const { query: scannersQ, refresh: refreshScanners } = useScannersQuery();
 
   const [scanner, setScanner] = useState('');
-  const [dpi, setDpi] = useState<string>('');
+  // Default to 92 DPI — typed text still reads cleanly at this density and
+  // file sizes stay reasonable. 72 was tested and looked too soft.
+  const [dpi, setDpi] = useState<string>('92');
   const [color, setColor] = useState(false);
+
+  const DPI_PRESETS: { label: string; value: number; hint: string }[] = [
+    { label: 'Text', value: 92, hint: 'Best for typed documents (small files, still legible)' },
+    { label: 'Cover', value: 100, hint: 'For book covers / mixed text + image' },
+    { label: 'HQ', value: 300, hint: 'High quality for OCR or fine detail (largest files)' },
+  ];
 
   useEffect(() => {
     if (!scanner && scannersQ.data && scannersQ.data.length > 0) {
@@ -70,19 +78,39 @@ export default function NewScanPage() {
           )}
         </label>
 
-        <label className="field">
-          <span>DPI (optional)</span>
+        <div className="field">
+          <span>DPI</span>
+          <div className="grid grid-cols-3 gap-1">
+            {DPI_PRESETS.map((p) => {
+              const active = Number(dpi) === p.value;
+              return (
+                <button
+                  key={p.value}
+                  type="button"
+                  className={
+                    active
+                      ? 'btn-primary justify-center text-xs'
+                      : 'btn-ghost justify-center text-xs'
+                  }
+                  onClick={() => setDpi(String(p.value))}
+                  title={p.hint}
+                >
+                  {p.label} · {p.value}
+                </button>
+              );
+            })}
+          </div>
           <input
             type="number"
-            className="input"
-            min={75}
+            className="input mt-1"
+            min={50}
             max={1200}
             step={25}
-            placeholder="default"
+            placeholder="custom"
             value={dpi}
             onChange={(e) => setDpi(e.target.value)}
           />
-        </label>
+        </div>
 
         <label className="flex items-center gap-2 text-sm text-slate-300">
           <input
